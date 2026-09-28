@@ -1,0 +1,36 @@
+# Rust build artifacts
+target/
+**/target/
+
+# Git files
+.git/
+.gitignore
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Documentation
+*.md
+README*
+
+# Test files
+**/__scripts__/
+**/*_test.py
+**/*_test.rs
+
+# Docker files (don't need to copy into image)
+.docker/
+
+# Other workspace members (only need nexus_py)
+src/nexus_audio/
+src/nexus_core/
+src/nexus_gui/
+src/nexus_screen/
+src/nexus/
+
+
+
+

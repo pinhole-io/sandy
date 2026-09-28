@@ -1,0 +1,23 @@
+[build-system]
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "sandy"
+version = "0.2.0"
+description = "Python code execution sandbox (Docker + uv); native bindings to the sandy crate."
+readme = "README.md"
+license = "BSD-4-Clause"
+requires-python = ">=3.12"
+
+[tool.maturin]
+features = ["python-bindings"]
+module-name = "sandy._native"
+python-source = "python"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["python"]

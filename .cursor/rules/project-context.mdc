@@ -1,0 +1,44 @@
+---
+description: Sandy — sandboxed Python execution for Loom and trusted callers
+alwaysApply: true
+---
+
+# sandy
+
+Controlled Python, JavaScript, and shell execution at `projects/sandy/`.
+Embedded by [`loom`](../loom) via `PythonExecutionService`.
+
+`sandy-js/` is a thin napi-rs binding for desktop Node.js and Bun callers.
+It delegates backend discovery, policy, timeout, and execution to this crate.
+It must fail closed when no sandbox backend is available.
+
+## Execution modes
+
+| Mode | Mechanism |
+|------|-----------|
+| Local Python | `uv run` with streaming stdout |
+| Local JavaScript | `node` (optional `npm install` for `// /// script` deps) |
+| Docker | `bollard` + structured **XML** output (stdout, stderr, timing, exit code) |
+
+## Loom tool contract
+
+Scripts invoked by Loom must use:
+
+- **PEP 723** inline metadata (`# /// script` … `dependencies = [...]` … `# ///`)
+- **stdin**: JSON tool arguments
+- **stdout**: JSON result (not argparse CLI)
+
+`uv` must be on the worker PATH.
+
+## Security
+
+- `global_dependencies` and bootstrap injection are for **trusted orchestrators only** (Loom worker).
+- Do not expose unrestricted bootstrap to untrusted callers.
+
+## Docs SSOT
+
+`docs/architecture.md`, `docs/development.md`, `docs/docker.md`, `docs/api.md`
+
+## Testing
+
+`make test` runs Rust tests + Python pytest.

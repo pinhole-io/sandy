@@ -1,0 +1,26 @@
+[package]
+name = "sandy_js"
+version = "0.1.0"
+edition = "2021"
+license = "BSD-4-Clause"
+description = "Node.js and Bun bindings for Sandy shell sandboxing"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = []
+firecracker = ["sandy/firecracker"]
+
+[dependencies]
+napi = { version = "3", default-features = false, features = [
+    "napi9",
+    "async",
+    "tokio_rt",
+] }
+napi-derive = "3"
+sandy = { path = "..", default-features = false, features = ["exec-sandbox"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[build-dependencies]
+napi-build = "2"

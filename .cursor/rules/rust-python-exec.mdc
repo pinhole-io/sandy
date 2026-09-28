@@ -1,0 +1,34 @@
+---
+description: Sandy Rust — Docker discovery, errors, PyO3 layout
+globs: "**/*.rs"
+alwaysApply: false
+---
+
+# Sandy Rust conventions
+
+## Docker connectivity
+
+Honor in order: `DOCKER_HOST`, Colima socket paths, local defaults.
+Document Colima in README when tests fail with “Cannot connect to Docker”.
+
+## Core types
+
+- `PythonExecutionService` — local `uv` execution
+- `JsExecutionService` — local `node` / `npm` execution
+- `DockerService` — container runs with XML parsing
+- `prepare_script` / `prepare_js_script` in `python/sandy/script_prep.py` (via PyO3)
+
+## Errors
+
+- `thiserror` for library errors; `anyhow` at CLI boundaries.
+- Preserve exit codes and stderr in structured output for Loom parsers.
+
+## Python bindings
+
+- Mixed layout: `python/sandy/` wraps `sandy._native` (maturin).
+- Public API: `import sandy` — keep Rust/Python contract aligned.
+
+## Tests
+
+- Rust unit tests + pytest; Docker tests may need daemon running.
+- XML output format is a contract — changing it requires loom parser updates.

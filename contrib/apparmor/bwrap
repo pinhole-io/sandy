@@ -1,0 +1,19 @@
+# Allow /usr/bin/bwrap to create user namespaces on Ubuntu 24.04+.
+#
+# kernel.apparmor_restrict_unprivileged_userns=1 blocks uid_map writes for
+# binaries that have no AppArmor userns grant. This profile matches the
+# distro pattern used by chrome and linux-sandbox: a named unconfined
+# profile whose only job is that grant.
+#
+# Install:
+#   sudo cp contrib/apparmor/bwrap /etc/apparmor.d/bwrap
+#   sudo apparmor_parser -r /etc/apparmor.d/bwrap
+
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+
+  include if exists <local/bwrap>
+}
