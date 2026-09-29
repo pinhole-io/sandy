@@ -11,6 +11,7 @@ use tracing::warn;
 use super::command::run_command_with_timeout_and_output;
 use super::error::SandboxError;
 use super::policy::ExecPolicy;
+use super::process::SupervisedProcess;
 use super::result::OutputSink;
 use super::CommandSandbox;
 use super::ExecResult;
@@ -328,6 +329,37 @@ pub struct BubblewrapSandbox;
 impl BubblewrapSandbox {
     pub fn bwrap_on_path() -> bool {
         which_bwrap().is_some()
+    }
+
+    /// Start a process with both network and process namespace isolation.
+    ///
+    /// This method fails closed when either namespace is unavailable. The
+    /// returned handle owns the process until it exits or the handle drops.
+    pub async fn start_shell_process(
+        &self,
+        policy: &ExecPolicy,
+        command: &str,
+    ) -> Result<SupervisedProcess, SandboxError> {
+        if command.is_empty() || command.contains('\0') {
+            return Err(SandboxError::InvalidPolicy("invalid command".into()));
+        }
+        if !self.is_available() {
+            return Err(SandboxError::Unavailable(
+                "bubblewrap is unavailable".into(),
+            ));
+        }
+        if !unshare_net_supported() {
+            return Err(SandboxError::Unavailable(
+                "network namespace isolation is unavailable".into(),
+            ));
+        }
+        if !unshare_pid_supported() {
+            return Err(SandboxError::Unavailable(
+                "process namespace isolation is unavailable".into(),
+            ));
+        }
+        let argv = build_bwrap_argv(policy, command, true, true)?;
+        super::process::spawn_bwrap(&argv, policy).await
     }
 }
 

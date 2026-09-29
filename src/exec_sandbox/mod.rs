@@ -9,6 +9,7 @@ mod firecracker;
 mod git_roots;
 mod none;
 mod policy;
+mod process;
 mod result;
 mod stub;
 
@@ -29,6 +30,7 @@ pub use error::SandboxError;
 pub use firecracker::FirecrackerShellSandbox;
 pub use none::NoneSandbox;
 pub use policy::{EnvPolicy, ExecPolicy};
+pub use process::{ProcessSnapshot, ProcessStatus, SupervisedProcess};
 pub use result::ExecResult;
 
 pub use result::{emit_result_output, CommandSandbox, OutputSink, OutputStream};

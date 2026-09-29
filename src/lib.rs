@@ -18,8 +18,8 @@ pub use exec_sandbox::{
     bwrap_apparmor_profile, bwrap_unavailable_reason, emit_result_output, needs_bwrap_apparmor,
     none_sandbox_fallback_count, reset_bwrap_probe, reset_none_sandbox_fallback_count,
     select_backend, BubblewrapSandbox, CommandSandbox, EnvPolicy, ExecBackend, ExecPolicy,
-    ExecResult, NetworkPolicy, NoneSandbox, OutputSink, OutputStream, SandboxError,
-    SandboxSelection,
+    ExecResult, NetworkPolicy, NoneSandbox, OutputSink, OutputStream, ProcessSnapshot,
+    ProcessStatus, SandboxError, SandboxSelection, SupervisedProcess,
 };
 #[cfg(feature = "docker")]
 pub use service::docker::{DockerConfig, DockerError, DockerService};
