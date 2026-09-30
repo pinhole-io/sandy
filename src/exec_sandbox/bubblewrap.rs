@@ -1,12 +1,8 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-
-use async_trait::async_trait;
-use tokio::process::Command;
-use tracing::warn;
 
 use super::command::run_command_with_timeout_and_output;
 use super::error::SandboxError;
@@ -15,6 +11,8 @@ use super::process::SupervisedProcess;
 use super::result::OutputSink;
 use super::CommandSandbox;
 use super::ExecResult;
+use async_trait::async_trait;
+use tokio::process::Command;
 
 static UNSHARE_NET_WORKS: OnceLock<AtomicBool> = OnceLock::new();
 static BASIC_BWRAP_PROBE: Mutex<Option<BwrapProbe>> = Mutex::new(None);
@@ -40,24 +38,38 @@ pub fn build_bwrap_argv(
     isolate_network: bool,
     isolate_pid: bool,
 ) -> Result<Vec<String>, SandboxError> {
+    build_bwrap_argv_with_read_only_roots(policy, &[], command, isolate_network, isolate_pid)
+}
+
+fn build_bwrap_argv_with_read_only_roots(
+    policy: &ExecPolicy,
+    read_only_roots: &[PathBuf],
+    command: &str,
+    isolate_network: bool,
+    isolate_pid: bool,
+) -> Result<Vec<String>, SandboxError> {
     if !Path::new("/").exists() {
         return Err(SandboxError::InvalidPolicy("host root missing".into()));
     }
 
     let mut args = vec!["bwrap".to_string()];
-    args.push("--ro-bind".into());
-    args.push("/".into());
-    args.push("/".into());
+    push_runtime_mounts(&mut args);
 
     let cwd = policy
         .cwd
         .canonicalize()
         .map_err(|e| SandboxError::InvalidPolicy(format!("cwd {}: {e}", policy.cwd.display())))?;
 
+    let mut writable_hosts = Vec::with_capacity(policy.writable_roots.len());
     for root in &policy.writable_roots {
         let host = root.canonicalize().map_err(|e| {
             SandboxError::InvalidPolicy(format!("writable root {}: {e}", root.display()))
         })?;
+        if host == Path::new("/") {
+            return Err(SandboxError::InvalidPolicy(
+                "host root cannot be writable".into(),
+            ));
+        }
         let s = host.display().to_string();
         args.push("--bind".into());
         args.push(s.clone());
@@ -68,6 +80,28 @@ pub fn build_bwrap_argv(
             args.push("--tmpfs".into());
             args.push(format!("{}/hooks", host.display()));
         }
+        writable_hosts.push(host);
+    }
+
+    for root in read_only_roots {
+        let host = root.canonicalize().map_err(|error| {
+            SandboxError::InvalidPolicy(format!("read-only root {}: {error}", root.display()))
+        })?;
+        if host == Path::new("/") {
+            return Err(SandboxError::InvalidPolicy(
+                "host root cannot be mounted".into(),
+            ));
+        }
+        if writable_hosts
+            .iter()
+            .any(|writable| host.starts_with(writable) || writable.starts_with(&host))
+        {
+            return Err(SandboxError::InvalidPolicy(
+                "read-only and writable roots overlap".into(),
+            ));
+        }
+        let path = host.display().to_string();
+        args.extend(["--ro-bind".into(), path.clone(), path]);
     }
 
     args.push("--dev".into());
@@ -106,10 +140,6 @@ pub fn unshare_net_supported() -> bool {
     unshare_net_flag().load(Ordering::Relaxed)
 }
 
-fn mark_unshare_net_unsupported() {
-    unshare_net_flag().store(false, Ordering::Relaxed);
-}
-
 static UNSHARE_PID_WORKS: OnceLock<AtomicBool> = OnceLock::new();
 
 fn unshare_pid_flag() -> &'static AtomicBool {
@@ -121,62 +151,12 @@ pub fn unshare_pid_supported() -> bool {
     unshare_pid_flag().load(Ordering::Relaxed)
 }
 
-fn mark_unshare_pid_unsupported() {
-    unshare_pid_flag().store(false, Ordering::Relaxed);
-}
-
 fn probe_unshare_pid() -> bool {
-    which_bwrap().is_some_and(|bwrap| {
-        std::process::Command::new(bwrap)
-            .args([
-                "--die-with-parent",
-                "--unshare-pid",
-                "--as-pid-1",
-                "--ro-bind",
-                "/",
-                "/",
-                "--dev",
-                "/dev",
-                "--proc",
-                "/proc",
-                "--tmpfs",
-                "/tmp",
-                "--",
-                "true",
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    })
+    run_probe(false, true).is_ok_and(|output| output.status.success())
 }
 
 fn probe_unshare_net() -> bool {
-    which_bwrap().is_some_and(|bwrap| {
-        std::process::Command::new(bwrap)
-            .args([
-                "--unshare-net",
-                "--ro-bind",
-                "/",
-                "/",
-                "--dev",
-                "/dev",
-                "--proc",
-                "/proc",
-                "--tmpfs",
-                "/tmp",
-                "--",
-                "true",
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    })
+    run_probe(true, false).is_ok_and(|output| output.status.success())
 }
 
 fn basic_bwrap_supported() -> bool {
@@ -253,30 +233,13 @@ pub fn bwrap_unavailable_reason() -> Option<String> {
 }
 
 fn probe_basic_bwrap() -> BwrapProbe {
-    let Some(bwrap) = which_bwrap() else {
+    if which_bwrap().is_none() {
         return BwrapProbe {
             ok: false,
             detail: "bwrap not found on PATH".to_string(),
         };
-    };
-    match std::process::Command::new(bwrap)
-        .args([
-            "--ro-bind",
-            "/",
-            "/",
-            "--dev",
-            "/dev",
-            "--proc",
-            "/proc",
-            "--tmpfs",
-            "/tmp",
-            "--",
-            "true",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .output()
-    {
+    }
+    match run_probe(false, false) {
         Ok(output) if output.status.success() => BwrapProbe {
             ok: true,
             detail: String::new(),
@@ -292,19 +255,54 @@ fn probe_basic_bwrap() -> BwrapProbe {
     }
 }
 
-fn isolate_network_for_policy(policy: &ExecPolicy) -> bool {
-    !policy.allow_network && unshare_net_supported()
+fn run_probe(
+    isolate_network: bool,
+    isolate_pid: bool,
+) -> Result<std::process::Output, std::io::Error> {
+    let Some(bwrap) = which_bwrap() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "bwrap not found on PATH",
+        ));
+    };
+    std::process::Command::new(bwrap)
+        .args(build_probe_argv(isolate_network, isolate_pid))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .output()
 }
 
-fn is_loopback_netns_error(stderr: &str) -> bool {
-    stderr.contains("loopback")
-        || stderr.contains("RTM_NEWADDR")
-        || stderr.contains("Operation not permitted") && stderr.contains("bwrap")
+fn build_probe_argv(isolate_network: bool, isolate_pid: bool) -> Vec<String> {
+    let mut args = Vec::new();
+    push_runtime_mounts(&mut args);
+    args.extend([
+        "--dev".into(),
+        "/dev".into(),
+        "--proc".into(),
+        "/proc".into(),
+        "--tmpfs".into(),
+        "/tmp".into(),
+    ]);
+    if isolate_network {
+        args.push("--unshare-net".into());
+    }
+    if isolate_pid {
+        args.extend([
+            "--die-with-parent".into(),
+            "--unshare-pid".into(),
+            "--as-pid-1".into(),
+        ]);
+    }
+    args.extend(["--".into(), "sh".into(), "-c".into(), "true".into()]);
+    args
 }
 
-fn is_pid_ns_error(stderr: &str) -> bool {
-    let lower = stderr.to_ascii_lowercase();
-    lower.contains("unshare-pid") || lower.contains("pid namespace") || lower.contains("as-pid-1")
+fn push_runtime_mounts(args: &mut Vec<String>) {
+    for path in ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"] {
+        if Path::new(path).exists() {
+            args.extend(["--ro-bind".into(), path.into(), path.into()]);
+        }
+    }
 }
 
 async fn spawn_bwrap(
@@ -329,6 +327,45 @@ pub struct BubblewrapSandbox;
 impl BubblewrapSandbox {
     pub fn bwrap_on_path() -> bool {
         which_bwrap().is_some()
+    }
+
+    /// Run a fixed command with additional host paths mounted read-only.
+    ///
+    /// The host root and paths that overlap a writable root are rejected.
+    pub async fn run_shell_with_read_only_roots(
+        &self,
+        policy: &ExecPolicy,
+        read_only_roots: &[PathBuf],
+        command: &str,
+        timeout: Duration,
+    ) -> Result<ExecResult, SandboxError> {
+        if command.is_empty() || command.contains('\0') {
+            return Err(SandboxError::InvalidPolicy("invalid command".into()));
+        }
+        if !self.is_available() {
+            return Err(SandboxError::Unavailable(
+                "bubblewrap is unavailable".into(),
+            ));
+        }
+        if !policy.allow_network && !unshare_net_supported() {
+            return Err(SandboxError::Unavailable(
+                "network namespace isolation is unavailable".into(),
+            ));
+        }
+        if !unshare_pid_supported() {
+            return Err(SandboxError::Unavailable(
+                "process namespace isolation is unavailable".into(),
+            ));
+        }
+        let argv = build_bwrap_argv_with_read_only_roots(
+            policy,
+            read_only_roots,
+            command,
+            !policy.allow_network,
+            true,
+        )?;
+        let output = spawn_bwrap(&argv, timeout, policy, None).await?;
+        Ok(ExecResult::from_output(output))
     }
 
     /// Start a process with both network and process namespace isolation.
@@ -363,6 +400,109 @@ impl BubblewrapSandbox {
     }
 }
 
+/// Bubblewrap backend that exposes only the workspace and runtime directories.
+///
+/// The caller must provide a workspace as `cwd`. Every writable root must
+/// remain below that directory. The host root is never mounted.
+pub struct WorkspaceBubblewrapSandbox;
+
+impl WorkspaceBubblewrapSandbox {
+    pub async fn start_shell_process(
+        &self,
+        policy: &ExecPolicy,
+        command: &str,
+    ) -> Result<SupervisedProcess, SandboxError> {
+        let policy = workspace_policy(policy)?;
+        validate_isolated_backend(command)?;
+        let argv = build_bwrap_argv(&policy, command, true, true)?;
+        super::process::spawn_bwrap(&argv, &policy).await
+    }
+}
+
+#[async_trait]
+impl CommandSandbox for WorkspaceBubblewrapSandbox {
+    fn id(&self) -> &'static str {
+        "workspace-bubblewrap"
+    }
+
+    fn is_available(&self) -> bool {
+        BubblewrapSandbox.is_available() && unshare_net_supported() && unshare_pid_supported()
+    }
+
+    async fn run_shell(
+        &self,
+        policy: &ExecPolicy,
+        command: &str,
+        timeout: Duration,
+    ) -> Result<ExecResult, SandboxError> {
+        let policy = workspace_policy(policy)?;
+        validate_isolated_backend(command)?;
+        let argv = build_bwrap_argv(&policy, command, true, true)?;
+        let output = spawn_bwrap(&argv, timeout, &policy, None).await?;
+        Ok(ExecResult::from_output(output))
+    }
+
+    async fn run_shell_streaming(
+        &self,
+        policy: &ExecPolicy,
+        command: &str,
+        timeout: Duration,
+        on_output: Option<OutputSink>,
+    ) -> Result<ExecResult, SandboxError> {
+        let policy = workspace_policy(policy)?;
+        validate_isolated_backend(command)?;
+        let argv = build_bwrap_argv(&policy, command, true, true)?;
+        let output = spawn_bwrap(&argv, timeout, &policy, on_output).await?;
+        Ok(ExecResult::from_output(output))
+    }
+}
+
+fn validate_isolated_backend(command: &str) -> Result<(), SandboxError> {
+    if command.is_empty() || command.contains('\0') {
+        return Err(SandboxError::InvalidPolicy("invalid command".into()));
+    }
+    if !WorkspaceBubblewrapSandbox.is_available() {
+        return Err(SandboxError::Unavailable(
+            "workspace bubblewrap isolation is unavailable".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn workspace_policy(policy: &ExecPolicy) -> Result<ExecPolicy, SandboxError> {
+    let cwd = policy
+        .cwd
+        .canonicalize()
+        .map_err(|error| SandboxError::InvalidPolicy(format!("workspace: {error}")))?;
+    if !cwd.is_dir() {
+        return Err(SandboxError::InvalidPolicy(
+            "workspace is not a directory".into(),
+        ));
+    }
+    let mut writable_roots = Vec::with_capacity(policy.writable_roots.len().max(1));
+    for root in &policy.writable_roots {
+        let root = root
+            .canonicalize()
+            .map_err(|error| SandboxError::InvalidPolicy(format!("writable root: {error}")))?;
+        if !root.starts_with(&cwd) {
+            return Err(SandboxError::InvalidPolicy(
+                "writable root is outside workspace".into(),
+            ));
+        }
+        writable_roots.push(root);
+    }
+    if !writable_roots.iter().any(|root| root == &cwd) {
+        writable_roots.push(cwd.clone());
+    }
+    Ok(ExecPolicy {
+        cwd,
+        writable_roots,
+        allow_network: false,
+        env: policy.env.clone(),
+        max_output_bytes: policy.max_output_bytes,
+    })
+}
+
 fn which_bwrap() -> Option<std::path::PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths).find_map(|dir| {
@@ -388,33 +528,18 @@ impl CommandSandbox for BubblewrapSandbox {
         command: &str,
         timeout: Duration,
     ) -> Result<ExecResult, SandboxError> {
-        let isolate = isolate_network_for_policy(policy);
-        let isolate_pid = unshare_pid_supported();
-        let argv = build_bwrap_argv(policy, command, isolate, isolate_pid)?;
-        let output = spawn_bwrap(&argv, timeout, policy, None).await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if isolate && is_loopback_netns_error(&stderr) {
-                warn!(
-                    "bwrap --unshare-net failed ({stderr}); retrying without network namespace isolation"
-                );
-                mark_unshare_net_unsupported();
-                let argv = build_bwrap_argv(policy, command, false, isolate_pid)?;
-                let output = spawn_bwrap(&argv, timeout, policy, None).await?;
-                return Ok(ExecResult::from_output(output));
-            }
-            if isolate_pid && is_pid_ns_error(&stderr) {
-                warn!(
-                    "bwrap --unshare-pid failed ({stderr}); retrying without process namespace isolation"
-                );
-                mark_unshare_pid_unsupported();
-                let argv = build_bwrap_argv(policy, command, isolate, false)?;
-                let output = spawn_bwrap(&argv, timeout, policy, None).await?;
-                return Ok(ExecResult::from_output(output));
-            }
+        if !policy.allow_network && !unshare_net_supported() {
+            return Err(SandboxError::Unavailable(
+                "network namespace isolation is unavailable".into(),
+            ));
         }
-
+        if !unshare_pid_supported() {
+            return Err(SandboxError::Unavailable(
+                "process namespace isolation is unavailable".into(),
+            ));
+        }
+        let argv = build_bwrap_argv(policy, command, !policy.allow_network, true)?;
+        let output = spawn_bwrap(&argv, timeout, policy, None).await?;
         Ok(ExecResult::from_output(output))
     }
 
@@ -425,33 +550,18 @@ impl CommandSandbox for BubblewrapSandbox {
         timeout: Duration,
         on_output: Option<OutputSink>,
     ) -> Result<ExecResult, SandboxError> {
-        let isolate = isolate_network_for_policy(policy);
-        let isolate_pid = unshare_pid_supported();
-        let argv = build_bwrap_argv(policy, command, isolate, isolate_pid)?;
-        let output = spawn_bwrap(&argv, timeout, policy, on_output.clone()).await?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            if isolate && is_loopback_netns_error(&stderr) {
-                warn!(
-                    "bwrap --unshare-net failed ({stderr}); retrying without network namespace isolation"
-                );
-                mark_unshare_net_unsupported();
-                let argv = build_bwrap_argv(policy, command, false, isolate_pid)?;
-                let output = spawn_bwrap(&argv, timeout, policy, on_output).await?;
-                return Ok(ExecResult::from_output(output));
-            }
-            if isolate_pid && is_pid_ns_error(&stderr) {
-                warn!(
-                    "bwrap --unshare-pid failed ({stderr}); retrying without process namespace isolation"
-                );
-                mark_unshare_pid_unsupported();
-                let argv = build_bwrap_argv(policy, command, isolate, false)?;
-                let output = spawn_bwrap(&argv, timeout, policy, on_output).await?;
-                return Ok(ExecResult::from_output(output));
-            }
+        if !policy.allow_network && !unshare_net_supported() {
+            return Err(SandboxError::Unavailable(
+                "network namespace isolation is unavailable".into(),
+            ));
         }
-
+        if !unshare_pid_supported() {
+            return Err(SandboxError::Unavailable(
+                "process namespace isolation is unavailable".into(),
+            ));
+        }
+        let argv = build_bwrap_argv(policy, command, !policy.allow_network, true)?;
+        let output = spawn_bwrap(&argv, timeout, policy, on_output.clone()).await?;
         Ok(ExecResult::from_output(output))
     }
 }
@@ -496,18 +606,18 @@ mod tests {
     }
 
     #[test]
-    fn detects_pid_namespace_errors() {
-        assert!(is_pid_ns_error(
-            "bwrap: setting up pid namespace: Permission denied"
-        ));
-        assert!(!is_pid_ns_error("bwrap: loopback: Failed RTM_NEWADDR"));
-    }
-
-    #[test]
-    fn detects_loopback_netns_errors() {
-        assert!(is_loopback_netns_error(
-            "bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted\n"
-        ));
+    fn probe_argv_mounts_every_runtime_path() {
+        let argv = build_probe_argv(true, true);
+        for path in ["/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc"] {
+            if Path::new(path).exists() {
+                assert!(argv.windows(3).any(|window| {
+                    window[0] == "--ro-bind" && window[1] == path && window[2] == path
+                }));
+            }
+        }
+        assert!(argv.contains(&"--unshare-net".to_string()));
+        assert!(argv.contains(&"--unshare-pid".to_string()));
+        assert!(argv.ends_with(&["sh".into(), "-c".into(), "true".into()]));
     }
 
     #[test]
@@ -573,5 +683,88 @@ mod tests {
             window[0] == "--bind" && window[1] == gitdir_path && window[2] == gitdir_path
         }));
         assert!(argv.contains(&format!("{gitdir_path}/hooks")));
+    }
+
+    #[test]
+    fn extra_read_root_is_read_only() {
+        let workspace = tempfile::TempDir::new().expect("workspace");
+        let readable = tempfile::TempDir::new().expect("readable");
+        let policy = ExecPolicy {
+            cwd: workspace.path().to_path_buf(),
+            writable_roots: vec![workspace.path().to_path_buf()],
+            allow_network: false,
+            env: EnvPolicy::default(),
+            max_output_bytes: 1024,
+        };
+        let argv = build_bwrap_argv_with_read_only_roots(
+            &policy,
+            &[readable.path().to_path_buf()],
+            "true",
+            true,
+            true,
+        )
+        .expect("argv");
+        let path = readable.path().canonicalize().expect("readable path");
+        let path = path.display().to_string();
+        assert!(argv
+            .windows(3)
+            .any(|window| { window[0] == "--ro-bind" && window[1] == path && window[2] == path }));
+        assert!(!argv
+            .windows(3)
+            .any(|window| window[0] == "--bind" && window[1] == path));
+    }
+
+    #[test]
+    fn extra_read_root_rejects_the_host_root() {
+        let workspace = tempfile::TempDir::new().expect("workspace");
+        let policy = ExecPolicy {
+            cwd: workspace.path().to_path_buf(),
+            writable_roots: vec![workspace.path().to_path_buf()],
+            allow_network: false,
+            env: EnvPolicy::default(),
+            max_output_bytes: 1024,
+        };
+        let error = build_bwrap_argv_with_read_only_roots(
+            &policy,
+            &[PathBuf::from("/")],
+            "true",
+            true,
+            true,
+        )
+        .expect_err("host root must be rejected");
+        assert!(matches!(error, SandboxError::InvalidPolicy(_)));
+    }
+
+    #[tokio::test]
+    async fn strict_workspace_rejects_a_writable_sibling() {
+        let workspace = tempfile::TempDir::new().expect("workspace");
+        let sibling = tempfile::TempDir::new().expect("sibling");
+        let policy = ExecPolicy {
+            cwd: workspace.path().to_path_buf(),
+            writable_roots: vec![sibling.path().to_path_buf()],
+            allow_network: false,
+            env: EnvPolicy::default(),
+            max_output_bytes: 1024,
+        };
+        let error = WorkspaceBubblewrapSandbox
+            .run_shell(&policy, "touch outside", Duration::from_secs(1))
+            .await
+            .expect_err("sibling must be rejected");
+        assert!(matches!(error, SandboxError::InvalidPolicy(_)));
+    }
+
+    #[test]
+    fn sandbox_argv_never_mounts_the_host_root() {
+        let policy = ExecPolicy {
+            cwd: PathBuf::from("/tmp"),
+            writable_roots: vec![PathBuf::from("/tmp")],
+            allow_network: false,
+            env: EnvPolicy::default(),
+            max_output_bytes: 1024,
+        };
+        let argv = build_bwrap_argv(&policy, "true", true, true).expect("argv");
+        assert!(!argv
+            .windows(3)
+            .any(|window| { window[0] == "--ro-bind" && window[1] == "/" && window[2] == "/" }));
     }
 }

@@ -23,7 +23,7 @@ static NONE_SANDBOX_AUTO_FALLBACKS: AtomicU64 = AtomicU64::new(0);
 
 pub use bubblewrap::{
     build_bwrap_argv, bwrap_apparmor_profile, bwrap_unavailable_reason, needs_bwrap_apparmor,
-    reset_bwrap_probe, BubblewrapSandbox,
+    reset_bwrap_probe, BubblewrapSandbox, WorkspaceBubblewrapSandbox,
 };
 pub use error::SandboxError;
 #[cfg(feature = "firecracker")]
@@ -189,7 +189,7 @@ fn pick_docker_or_warn(fail_closed: bool) -> Result<Arc<dyn CommandSandbox>, San
             return Ok(d);
         }
         warn!("docker backend requested but Docker is unavailable; using none");
-        return none_or_unavailable(fail_closed, "Docker is unavailable".into());
+        none_or_unavailable(fail_closed, "Docker is unavailable".into())
     }
 
     #[cfg(not(feature = "docker"))]

@@ -19,7 +19,7 @@ pub use exec_sandbox::{
     none_sandbox_fallback_count, reset_bwrap_probe, reset_none_sandbox_fallback_count,
     select_backend, BubblewrapSandbox, CommandSandbox, EnvPolicy, ExecBackend, ExecPolicy,
     ExecResult, NetworkPolicy, NoneSandbox, OutputSink, OutputStream, ProcessSnapshot,
-    ProcessStatus, SandboxError, SandboxSelection, SupervisedProcess,
+    ProcessStatus, SandboxError, SandboxSelection, SupervisedProcess, WorkspaceBubblewrapSandbox,
 };
 #[cfg(feature = "docker")]
 pub use service::docker::{DockerConfig, DockerError, DockerService};
