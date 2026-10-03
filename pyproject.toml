@@ -7,12 +7,12 @@ name = "sandy"
 version = "0.2.0"
 description = "Python code execution sandbox (Docker + uv); native bindings to the sandy crate."
 readme = "README.md"
-license = "BSD-4-Clause"
+license = "MIT"
 requires-python = ">=3.12"
 
 [tool.maturin]
 features = ["python-bindings"]
-module-name = "sandy._native"
+module-name = "sandy-py._native"
 python-source = "python"
 
 [project.optional-dependencies]

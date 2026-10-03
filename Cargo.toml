@@ -2,7 +2,7 @@
 name = "sandy"
 version = "0.2.0"
 edition = "2021"
-license = "BSD-4-Clause"
+license = "MIT"
 default-run = "sandy"
 
 [lib]
