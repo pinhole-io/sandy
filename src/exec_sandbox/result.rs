@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -69,4 +70,34 @@ pub trait CommandSandbox: Send + Sync {
         emit_result_output(on_output.as_ref(), &result);
         Ok(result)
     }
+
+    /// Start one long-lived sandbox for `policy`.
+    ///
+    /// The default fails closed. A backend that implements this reuses the
+    /// same mounts for later commands. It must not run the command on the host.
+    async fn open_warm(
+        &self,
+        _policy: &ExecPolicy,
+    ) -> Result<Box<dyn WarmCommand>, SandboxError> {
+        let _ = _policy;
+        Err(SandboxError::Unavailable(
+            "warm session is unavailable".into(),
+        ))
+    }
+}
+
+/// One command inside a warm sandbox session.
+#[async_trait]
+pub trait WarmCommand: Send {
+    /// Run `command` with `cwd` inside the session roots.
+    async fn run(
+        &mut self,
+        cwd: &Path,
+        command: &str,
+        max_output_bytes: usize,
+        timeout: Duration,
+    ) -> Result<ExecResult, SandboxError>;
+
+    /// Host pid of the sandbox process. It stays the same across `run` calls.
+    fn host_pid(&self) -> u32;
 }

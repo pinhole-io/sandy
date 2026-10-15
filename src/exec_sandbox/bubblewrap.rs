@@ -41,7 +41,7 @@ pub fn build_bwrap_argv(
     build_bwrap_argv_with_read_only_roots(policy, &[], command, isolate_network, isolate_pid)
 }
 
-fn build_bwrap_argv_with_read_only_roots(
+pub(super) fn build_bwrap_argv_with_read_only_roots(
     policy: &ExecPolicy,
     read_only_roots: &[PathBuf],
     command: &str,
@@ -437,9 +437,15 @@ impl CommandSandbox for WorkspaceBubblewrapSandbox {
     ) -> Result<ExecResult, SandboxError> {
         let policy = workspace_policy(policy)?;
         validate_isolated_backend(command)?;
-        let argv = build_bwrap_argv(&policy, command, true, true)?;
-        let output = spawn_bwrap(&argv, timeout, &policy, None).await?;
-        Ok(ExecResult::from_output(output))
+        match super::warm::run_warm(&policy, &[], command, timeout, true).await {
+            Ok(result) => Ok(result),
+            Err(SandboxError::Unavailable(_)) => {
+                let argv = build_bwrap_argv(&policy, command, true, true)?;
+                let output = spawn_bwrap(&argv, timeout, &policy, None).await?;
+                Ok(ExecResult::from_output(output))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     async fn run_shell_streaming(
@@ -563,6 +569,14 @@ impl CommandSandbox for BubblewrapSandbox {
         let argv = build_bwrap_argv(policy, command, !policy.allow_network, true)?;
         let output = spawn_bwrap(&argv, timeout, policy, on_output.clone()).await?;
         Ok(ExecResult::from_output(output))
+    }
+
+    async fn open_warm(
+        &self,
+        policy: &ExecPolicy,
+    ) -> Result<Box<dyn super::WarmCommand>, SandboxError> {
+        let session = super::warm::BwrapSession::start(policy, &[], !policy.allow_network).await?;
+        Ok(Box::new(session))
     }
 }
 

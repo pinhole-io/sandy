@@ -1,4 +1,5 @@
 mod bubblewrap;
+mod warm;
 mod command;
 #[cfg(feature = "docker")]
 mod docker;
@@ -33,7 +34,8 @@ pub use policy::{EnvPolicy, ExecPolicy};
 pub use process::{ProcessSnapshot, ProcessStatus, SupervisedProcess};
 pub use result::ExecResult;
 
-pub use result::{emit_result_output, CommandSandbox, OutputSink, OutputStream};
+pub use result::{emit_result_output, CommandSandbox, OutputSink, OutputStream, WarmCommand};
+pub use warm::run_warm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExecBackend {
