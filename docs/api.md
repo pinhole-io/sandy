@@ -5,12 +5,12 @@
 ```rust
 use sandy::{
     Cli, Commands,
-    DockerConfig, DockerError, DockerService,
     ExecutionResult, PythonExecutionError, PythonExecutionService,
     JsExecutionError, JsExecutionService,
-    FirecrackerConfig, FirecrackerError, FirecrackerService,
 };
 ```
+
+`DockerConfig`, `DockerError`, and `DockerService` need the `docker` feature. `FirecrackerConfig`, `FirecrackerError`, and `FirecrackerService` need the `firecracker` feature.
 
 Public re-exports are defined in `src/lib.rs`.
 
@@ -176,7 +176,7 @@ Async type wrapping `bollard::Docker` + `DockerConfig`. All methods are `async` 
 
 ## Python package (`import sandy`)
 
-The **`sandy`** wheel wraps native Docker and Firecracker functions and applies optional script preparation. See the [README](../README.md) Python section.
+The package source is `python/sandy/`. `import sandy` prepares a script and calls `sandy._native`. The Docker helpers need the `docker` feature. The Firecracker helpers need the `firecracker` feature. See [python/README.md](../python/README.md).
 
 ---
 

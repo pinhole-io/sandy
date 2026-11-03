@@ -37,7 +37,9 @@ Scripts invoked by Loom must use:
 
 ## Docs SSOT
 
-`docs/architecture.md`, `docs/development.md`, `docs/docker.md`, `docs/api.md`
+Start at `docs/README.md`.
+
+`docs/architecture.md`, `docs/cli-reference.md`, `docs/docker.md`, `docs/firecracker.md`, `docs/api.md`, `docs/development.md`
 
 ## Testing
 

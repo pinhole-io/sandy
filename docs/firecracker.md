@@ -86,22 +86,20 @@ The default VM has no network interface. `--allow-network` requires a
 pre-created TAP device in `SANDY_FC_TAP`. Sandy does not create NAT or
 configure a host firewall.
 
-## Harn
+## Shell backend
 
-Build the Harn Sandy plugin with the `firecracker` feature enabled. Set:
-
-```toml
-[sandbox]
-backend = "firecracker"
-```
-
-The shell backend archives the workspace into the VM and restores it after
-execution. Writable roots outside the workspace are rejected.
+Select `FirecrackerShellSandbox` when the host must run a shell command in the microVM. The backend archives the workspace into the VM and restores it after the command. A writable root outside the workspace is rejected.
 
 ## Security and limitations
 
 - Firecracker provides a separate guest kernel and a KVM boundary.
-- The v1 integration starts one VM per request.
-- The v1 integration does not use `jailer`.
-- The v1 integration does not provide automatic networking.
+- One request starts one VM, unless you use `microvm start`.
+- This integration does not use `jailer`.
+- This integration does not create a network. You supply the TAP device.
 - The guest agent uses vsock port 52.
+
+## Related
+
+- [Docker guide](docker.md)
+- [CLI reference](cli-reference.md)
+- [Library API](api.md)

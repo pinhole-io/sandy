@@ -4,15 +4,31 @@ build-backend = "maturin"
 
 [project]
 name = "sandy"
-version = "0.2.0"
-description = "Python code execution sandbox (Docker + uv); native bindings to the sandy crate."
+version = "1.0.0"
+description = "Python bindings for sandboxed Python and JavaScript execution"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
+authors = [
+    { name = "Nick", email = "nick@nyoung.dev" },
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+]
+
+[project.urls]
+Homepage = "https://github.com/pinhole-io/sandy"
+Repository = "https://github.com/pinhole-io/sandy"
+Issues = "https://github.com/pinhole-io/sandy/issues"
 
 [tool.maturin]
 features = ["python-bindings"]
-module-name = "sandy-py._native"
+module-name = "sandy._native"
 python-source = "python"
 
 [project.optional-dependencies]

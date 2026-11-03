@@ -10,7 +10,7 @@ pub struct ShellArgs {
 }
 
 pub fn run_shell(args: ShellArgs) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Nexus Py Shell v0.1.0");
+    println!("sandy 1.0.0");
     println!("Type 'help' for available commands, 'exit' or 'quit' to exit");
     if args.verbose {
         println!("Verbose mode enabled");

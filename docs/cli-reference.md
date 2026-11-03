@@ -1,6 +1,6 @@
 # CLI reference
 
-The binary is produced from the **`sandy`** package (`cargo build -p sandy` or `cargo install --path .`). Clap uses the program name **`sandy`**.
+Build the binary from this repository with `cargo build --release` or `cargo install --path .`. The program name is `sandy`.
 
 ```bash
 sandy --help
@@ -156,7 +156,7 @@ Connects to Docker, runs **`execute_python_code`** (new ephemeral container), an
 | `--python-version` | `3.13` | `PYTHON_VERSION` build-arg when auto-building (pick a version uv provides for musl if using Alpine) |
 | `--allow-network` | off | If set, container gets outbound network (PyPI, `uv` downloads). Default is **no** egress (`network_mode=none`) |
 
-**Note:** If `image:tag` is missing, `docker-exec` runs **`docker build`** (unless `--no-auto-build`) using `--dockerfile`, `--build-context`, and `--python-version`. Manual build commands: [README – Docker: build the image](../README.md#docker-build-the-image) or [Docker guide – Building the image](docker.md#building-the-image).
+If `image:tag` is missing, `docker-exec` runs `docker build` unless you pass `--no-auto-build`. The build uses `--dockerfile`, `--build-context`, and `--python-version`. Manual build commands: [README](../README.md#docker) and [Docker guide](docker.md#building-the-image).
 
 **Network:** By default the sandbox uses **isolated** networking (no outbound). Use **`--allow-network`** when code or `uv` must reach the internet (inline dependencies, PyPI installs, Python runtime downloads).
 

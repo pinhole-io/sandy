@@ -10,7 +10,7 @@ Defined in `src/service/docker/config.rs`. Fields:
 |-------|---------|---------|
 | `image_name` | `sandy` | Repository/name part of `image:tag` |
 | `image_tag` | `latest` | Tag part |
-| `dockerfile_path` | `src/sandy/.docker/Dockerfile` | Documented path to the Dockerfile (used by tooling/scripts; not automatically applied by `DockerService`) |
+| `dockerfile_path` | `src/sandy/.docker/Dockerfile` | Path stored by `DockerConfig::default()`. The CLI picks a file that exists. See [Building the image](#building-the-image). |
 | `build_context` | `.` | Default build context directory when building from repo root |
 
 ### Validation (`validate()`)
@@ -33,59 +33,49 @@ API version: bollard’s **`API_DEFAULT_VERSION`** for the client.
 
 ## Building the image
 
-The Dockerfile lives at **[`.docker/Dockerfile`](../.docker/Dockerfile)** (path may differ if the crate is vendored). It:
+The Dockerfile is [`.docker/Dockerfile`](../.docker/Dockerfile).
 
-- Uses a **Rust nightly** builder with **musl** for a static binary.
-- Runtime image is **Alpine** (musl) with **curl**, **bash**, **`uv`**, a pre-installed Python (default **3.13** via build arg; use a version `uv` ships as `cpython-*-musl`), and **Node.js + npm** for `exec-js`.
+- The builder image is Rust nightly. The binary target is musl.
+- The runtime image is Alpine. It includes `curl`, `bash`, `uv`, Python, Node.js, and npm.
+- The default Python version is 3.13. Pass a version that `uv` ships as a musl build.
 
-Tag the image **`sandy:latest`** unless you pass `--image` / `--tag` to `docker-exec`.
+Tag the image `sandy:latest` unless you pass `--image` and `--tag` to `docker-exec`.
 
 ### Commands
 
-Use **`-f sandy/.docker/Dockerfile`** only when your current directory is the **workspace root** and `ls` shows a **`sandy/`** subdirectory. If your shell is **inside** the `sandy/` crate (`Cargo.toml` and `.docker/` here), use **`-f .docker/Dockerfile`** instead — otherwise Docker may report `lstat sandy: no such file or directory`.
-
-**Monorepo** — cwd is workspace root (`sandy/` exists as a child):
+Run these commands from this repository. The build context is the repository root.
 
 ```bash
-cd /path/to/workspace-root
-docker build -f sandy/.docker/Dockerfile -t sandy:latest .
-```
-
-**Standalone `sandy` repo** — cwd is the crate root (`Cargo.toml` next to `.docker/`):
-
-```bash
-cd /path/to/sandy
 docker build -f .docker/Dockerfile -t sandy:latest .
 ```
 
-Optional build arg: `--build-arg PYTHON_VERSION=3.12`.
+Optional build argument: `--build-arg PYTHON_VERSION=3.12`.
 
-**Helper script** ([`build.sh`](../.docker/build.sh)) — resolves the workspace root from `sandy/.docker` and runs `docker build`. Use from a layout where the parent of the `sandy` directory is the Cargo workspace root:
+[`.docker/build.sh`](../.docker/build.sh) runs that build. You can start it from any directory. The script uses this repository as the build context.
 
 ```bash
-cd /path/to/workspace-root
-bash sandy/.docker/build.sh
+.docker/build.sh
 ```
 
 ### `build.sh` environment variables
 
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `PYTHON_VERSION` | `3.13` | Python version pre-installed with `uv python install` (must have a musl build for Alpine) |
-| `IMAGE_NAME` | `sandy` | Docker image name (`DockerConfig` default) |
+| --- | --- | --- |
+| `PYTHON_VERSION` | `3.13` | Python version passed to `uv python install`. It must have a musl build. |
+| `IMAGE_NAME` | `sandy` | Image name |
 | `IMAGE_TAG` | `latest` | Image tag |
-| `DOCKERFILE_PATH` | `sandy/.docker/Dockerfile` | Path to Dockerfile (relative to workspace root) |
-| `BUILD_CONTEXT` | `.` | Build context (usually workspace root) |
-
-Override example:
 
 ```bash
-IMAGE_NAME=sandy DOCKERFILE_PATH=sandy/.docker/Dockerfile BUILD_CONTEXT=. bash sandy/.docker/build.sh
+PYTHON_VERSION=3.12 IMAGE_TAG=dev .docker/build.sh
 ```
 
-### Rename note (`nexus_sandbox` vs `sandy`)
+`DockerConfig::default()` still stores `src/sandy/.docker/Dockerfile`. The CLI does not use that string when a candidate file exists. Candidate order:
 
-Some older docs referred to **`nexus_sandbox`**. The crate and image default to **`sandy`**. See [Development](development.md#rename-status-nexus_sandbox--sandy).
+1. `.docker/Dockerfile`
+2. `sandy/.docker/Dockerfile`
+3. `src/sandy/.docker/Dockerfile`
+
+Pass `--dockerfile` when you build from another directory. Set `DockerConfig.dockerfile_path` when you call `DockerService` from Rust.
 
 ## Network isolation vs outbound access
 

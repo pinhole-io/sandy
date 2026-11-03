@@ -1,18 +1,16 @@
 #!/bin/bash
-# Build script for sandy Docker image
-# This script builds the Docker image from the workspace root
+# Build the sandy Docker image.
+# Run this script from any directory. The build context is the repository root.
 #
 # Usage:
-#   ./build.sh                          # Build with default Python 3.13
-#   PYTHON_VERSION=3.12 ./build.sh      # Build with Python 3.12
-#   PYTHON_VERSION=3.11 IMAGE_TAG=v1.0 ./build.sh  # Custom Python and tag
+#   .docker/build.sh
+#   PYTHON_VERSION=3.12 .docker/build.sh
+#   PYTHON_VERSION=3.12 IMAGE_TAG=v1.0 .docker/build.sh
 #
 # Environment variables:
 #   PYTHON_VERSION  - Python version to pre-install (default: 3.13)
 #   IMAGE_NAME      - Docker image name (default: sandy)
 #   IMAGE_TAG       - Docker image tag (default: latest)
-#   DOCKERFILE_PATH - Path to Dockerfile (default: sandy/.docker/Dockerfile)
-#   BUILD_CONTEXT   - Build context directory (default: .)
 
 set -e
 

@@ -1,68 +1,139 @@
-# sandy
+# Sandy
 
-Sandy runs Python and JavaScript locally, in Docker, or in a Firecracker microVM, and it can sandbox shell commands.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust edition 2021](https://img.shields.io/badge/rust-edition%202021-orange.svg)](Cargo.toml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
+[![Node.js 18+](https://img.shields.io/badge/node.js-18%2B-green.svg)](sandy-js)
+
+**Sandboxed Python, JavaScript, and shell execution.**
+
+Sandy runs code on the host, in Docker, or in a Firecracker microVM. The Rust library, the `sandy` CLI, the Python package, and the Node.js binding share one execution policy.
+
+[Quick start](#quick-start) · [Install](#install) · [CLI](docs/cli-reference.md) · [Docker](docs/docker.md) · [Firecracker](docs/firecracker.md) · [API](docs/api.md)
+
+## Contents
+
+- [Requirements](#requirements)
+- [Install](#install)
+- [Quick start](#quick-start)
+- [Features](#features)
+- [Cargo features](#cargo-features)
+- [How it fits together](#how-it-fits-together)
+- [Language bindings](#language-bindings)
+- [Documentation](#documentation)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+- [License](#license)
 
 ## Requirements
 
-- **Rust** (2021 edition) to build from source
-- **Local mode**: [`uv`](https://docs.astral.sh/uv/) on `PATH` for Python; [Node.js](https://nodejs.org/) (`node`) on `PATH` for JavaScript (`npm` only for `// /// script` dependencies)
-- **Docker mode** (optional `docker` feature): a Docker or Colima daemon
-- **Bubblewrap shell sandbox** (optional): `bwrap` on `PATH` (Linux). Ubuntu 24.04+ also needs an AppArmor `userns` profile for `/usr/bin/bwrap`. Without it, `bwrap` fails with `setting up uid map: Permission denied`. Install `contrib/apparmor/bwrap`:
+- Rust 2021 edition, to build from source.
+- [`uv`](https://docs.astral.sh/uv/) on `PATH`, for local Python.
+- [Node.js](https://nodejs.org/) 18 or newer (`node` on `PATH`), for local JavaScript. `npm` is required only for `// /// script` dependencies.
+- A Docker or Colima daemon, for the optional `docker` feature.
+- Linux, `/dev/kvm`, and the Firecracker artifacts, for microVM mode. See [Firecracker](docs/firecracker.md).
+- `bwrap` on Linux, for the bubblewrap shell sandbox.
+- Python 3.12 or newer and [`maturin`](https://www.maturin.rs/), to build the Python extension.
 
-  ```bash
-  sudo cp contrib/apparmor/bwrap /etc/apparmor.d/bwrap
-  sudo apparmor_parser -r /etc/apparmor.d/bwrap
-  ```
-- **Firecracker mode** (default on Linux): `/dev/kvm`, the `firecracker` binary, a kernel, and a Sandy rootfs; see [Firecracker](docs/firecracker.md)
-- **Python extension**: Python 3.12+ and [`maturin`](https://www.maturin.rs/) when you build the `sandy` wheel
+### Bubblewrap on Ubuntu 24.04 or newer
 
-## Install and quick start
+`bwrap` fails with `setting up uid map: Permission denied` when AppArmor blocks user namespaces.
 
-Clone the repo and build from the repository root:
+1. Copy the profile:
 
 ```bash
-git clone https://github.com/Bioto/sandy.git
+sudo cp contrib/apparmor/bwrap /etc/apparmor.d/bwrap
+sudo apparmor_parser -r /etc/apparmor.d/bwrap
+```
+
+2. Run the command again.
+
+## Install
+
+There is no crates.io, PyPI, or npm package. Build from this repository.
+
+| Surface | Where it runs | How to build |
+| --- | --- | --- |
+| Rust library and CLI | This repository | `cargo build --release` |
+| Python | CPython 3.12 or newer | `maturin` from this repository |
+| JavaScript | Node.js 18 or newer, and Bun | `sandy-js/` |
+
+### Rust
+
+```bash
+git clone https://github.com/pinhole-io/sandy.git
 cd sandy
 cargo build --release
 ```
 
-The binary is named **`sandy`**. Run `sandy --help` for subcommands.
+The binary name is `sandy`. Run `sandy --help`.
 
-### Tests
+Add the library from git:
 
-Run `make test` (Rust + Python), or `make test-rust` / `make test-python` alone. See [Development](docs/development.md#tests).
+```toml
+[dependencies]
+sandy = { git = "https://github.com/pinhole-io/sandy" }
+```
 
-### Local: run inline Python
+Pin a commit with `rev`. Enable a feature in the same dependency:
+
+```toml
+sandy = { git = "https://github.com/pinhole-io/sandy", default-features = false, features = ["exec-sandbox"] }
+```
+
+### Python
+
+The import name is `sandy`. The package source is [`python/sandy/`](python/sandy/).
+
+```bash
+uvx maturin develop --release
+```
+
+The default build includes Python bindings and Firecracker. Add Docker with:
+
+```bash
+uvx maturin develop --release --features python-bindings,docker
+```
+
+### JavaScript
+
+Build the binding from `sandy-js/`. Details: [sandy-js/README.md](sandy-js/README.md).
+
+```bash
+cd sandy-js
+npm ci
+npm test
+```
+
+## Quick start
+
+### Local Python
 
 ```bash
 cargo run -- exec-code --code 'print("hello")'
-```
-
-Or pipe code on stdin:
-
-```bash
 echo 'print(1 + 1)' | cargo run -- exec-code
-```
-
-### Local: run a Python script
-
-```bash
 cargo run -- py03 ./my_script.py
 ```
 
-### Local: run inline JavaScript
+A script can declare [PEP 723](https://docs.astral.sh/uv/guides/scripts/) dependencies:
+
+```python
+# /// script
+# dependencies = ["httpx"]
+# ///
+import httpx
+print(httpx.get("https://example.com", timeout=10).status_code)
+```
+
+### Local JavaScript
 
 ```bash
 cargo run -- exec-js --code 'console.log("hello")'
-```
-
-Or pipe code on stdin:
-
-```bash
 echo 'console.log(1 + 1)' | cargo run -- exec-js
+cargo run -- js ./my_script.mjs
 ```
 
-Inline npm dependencies use a `// /// script` block (same TOML shape as Python PEP 723):
+Inline npm dependencies use a `// /// script` block. The TOML shape matches PEP 723:
 
 ```javascript
 // /// script
@@ -72,42 +143,29 @@ import ms from "ms";
 console.log(ms("2 days"));
 ```
 
-### Local: run a JavaScript file
+### Docker
 
-```bash
-cargo run -- js ./my_script.mjs
-```
-
-### Docker: build the image
-
-Build context is the repository root (this directory contains `Cargo.toml` and `.docker/`):
+Build the image from this repository:
 
 ```bash
 docker build -f .docker/Dockerfile -t sandy:latest .
 ```
 
-Optional: set the Python version at build time with `--build-arg PYTHON_VERSION=3.12`.
+Set the Python version with `--build-arg PYTHON_VERSION=3.12`.
 
-### Docker: run Python or JavaScript in a container
-
-If **`sandy:latest`** is missing, `docker-exec` runs **`docker build`** automatically. Pass **`--no-auto-build`** to fail instead.
-
-**Network:** Default is **no outbound** (`network_mode=none`). Add **`--allow-network`** when you need PyPI or npm downloads:
+`docker-exec` builds `sandy:latest` when the image is missing. Pass `--no-auto-build` to fail instead. The default network mode is `none`. Pass `--allow-network` when the script must reach PyPI or npm.
 
 ```bash
-# Isolated (default)
 cargo run --features docker -- docker-exec --code 'print("from container")'
-
-# Outbound allowed (PyPI, etc.)
 cargo run --features docker -- docker-exec --allow-network --code 'print("from container")'
-
-# JavaScript (same XML output; --allow-network for npm installs)
 cargo run --features docker -- docker-exec-js --code 'console.log("from container")'
 ```
 
-### Firecracker: run Python or JavaScript in a microVM
+The command prints XML. The document contains stdout, stderr, timing, and the exit code.
 
-Build the kernel and rootfs with the [Firecracker guide](docs/firecracker.md), then run:
+### Firecracker
+
+Build the kernel and the rootfs with the [Firecracker guide](docs/firecracker.md). Then run:
 
 ```bash
 cargo run --features firecracker -- fc-exec \
@@ -116,9 +174,7 @@ cargo run --features firecracker -- fc-exec \
   --code 'print("from microVM")'
 ```
 
-Manage a persistent VM with `sandy microvm start`, `sandy microvm status`, and `sandy microvm stop`.
-
-Output is XML that describes stdout, stderr, and metrics.
+`sandy microvm start`, `sandy microvm status`, and `sandy microvm stop` manage a persistent VM. The output is the same XML document as `docker-exec`.
 
 ### Interactive shell
 
@@ -128,66 +184,60 @@ cargo run -- shell
 
 ## Features
 
-- **Local execution**: Run Python through `uv run` or JavaScript through Node.js, with streaming stdout and captured exit codes.
-- **Docker execution**: Run the same CLI inside a container, with structured **XML** output (stdout, stderr, timing, exit code).
-- **Firecracker execution**: Run Python and JavaScript inside a Linux microVM with a separate guest kernel.
-- **Library API**: Embed `PythonExecutionService` / `JsExecutionService` (always) and `DockerService` (with `docker` feature), plus `sandy::exec_sandbox` for shell isolation.
-- **Python bindings (PyO3 + maturin)**: The **`sandy` package** (`python/sandy/`) wraps the native module **`sandy._native`**. Build with `maturin develop` / `maturin build` from the repo root (see `pyproject.toml`).
-- **Pluggable shell sandbox (`exec_sandbox`)**: Embed `NoneSandbox`, `BubblewrapSandbox` (Linux + `bwrap`), or optional `DockerShellSandbox`.
-- **Desktop JavaScript bindings**: `sandy-js/` provides thin napi-rs bindings for Node.js and Bun.
-- **Flexible Docker connectivity**: Honors `DOCKER_HOST`, then Colima sockets, then local defaults (when `docker` is enabled).
+| Feature | What you get |
+| --- | --- |
+| Local Python | `uv run`, streaming stdout, and the child exit code |
+| Local JavaScript | `node`, optional `npm install --ignore-scripts`, and the child exit code |
+| Docker | A container per run, or a persistent container. XML output. |
+| Firecracker | A Linux microVM with a separate guest kernel. XML output. |
+| Shell sandbox | `NoneSandbox`, `BubblewrapSandbox`, and optional Docker or Firecracker shells |
+| Python package | `import sandy` over the native extension |
+| Node.js binding | `sandy-js` for desktop Node.js and Bun |
 
 ## Cargo features
 
-Docker is **optional**. You can use sandy for local Python and shell sandboxing without linking bollard.
+Docker is optional. Local Python and the shell sandbox do not link bollard.
 
 | Feature | Default | Purpose |
-|---------|---------|---------|
-| `python-bindings` | yes | PyO3 extension (`sandy._native`) |
-| `exec-sandbox` | no | Marker for embedders; `exec_sandbox` is always in the library |
-| `docker` | no | `DockerService`, `docker-exec` / `docker-exec-js` CLI, `DockerShellSandbox`, Python Docker bindings |
-| `firecracker` | yes | Firecracker microVM service, `fc-exec` / `fc-exec-js`, and `FirecrackerShellSandbox` |
+| --- | --- | --- |
+| `python-bindings` | yes | PyO3 extension `sandy._native` |
+| `firecracker` | yes | MicroVM service, `fc-exec`, `fc-exec-js`, and `microvm` |
+| `docker` | no | `DockerService`, `docker-exec`, `docker-exec-js`, and `DockerShellSandbox` |
+| `exec-sandbox` | no | Marker for embedders. The library always includes `exec_sandbox`. |
 
 | Build | Command |
-|-------|---------|
-| Local Python + shell sandbox only | `cargo build --no-default-features` |
-| Full CLI (local + Docker) | `cargo build --features docker` |
-| Embedder without defaults | `sandy = { default-features = false, features = ["exec-sandbox"] }` |
+| --- | --- |
+| Local Python and the shell sandbox | `cargo build --no-default-features` |
+| CLI with Docker | `cargo build --features docker` |
+| Embedder without default features | `sandy = { default-features = false, features = ["exec-sandbox"] }` |
 | Python wheel with Docker | `maturin develop --features python-bindings,docker` |
 
-## Documentation
+## How it fits together
 
-| Document | Description |
-|----------|-------------|
-| [Architecture](docs/architecture.md) | Layout, execution modes, data flow |
-| [CLI reference](docs/cli-reference.md) | All commands and flags |
-| [Docker guide](docs/docker.md) | Building images, config, XML output, timeouts |
-| [Library API](docs/api.md) | Types and public methods |
-| [Development](docs/development.md) | Build, test, logging |
-| [Firecracker](docs/firecracker.md) | MicroVM kernel, rootfs, and CLI |
-
-## `sandy-js`
-
-Build the desktop binding from `sandy-js/`:
-
-```bash
-cd sandy-js
-npm ci
-npm test
-npm run build:native
+```text
+CLI / Python / Node.js / Rust embedder
+            │
+            ▼
+          sandy
+            │
+            ├── uv / node          local execution
+            ├── bollard            Docker, optional
+            ├── Firecracker        microVM, Linux
+            └── exec_sandbox       shell isolation
 ```
 
-`runShell` requires an absolute workspace directory. It uses a clean environment, **denies network access by default**, limits command time to 600 seconds, and bounds each output stream. It rejects the unsandboxed backend and fails when no selected backend is available.
+- The Rust crate owns process limits, backend selection, and the CLI.
+- Docker and Firecracker run the same `sandy` binary inside the guest.
+- `sandy-js` calls `exec_sandbox`. It does not copy the policy into JavaScript.
+- The Python package prepares a script, then calls `sandy._native`.
 
-Android does not load this package. Harn Android uses a remote-only TUI profile, so it does not mount a local directory or execute local shell commands.
+Read the map in [Architecture](docs/architecture.md).
 
-## Python package
+## Language bindings
 
-From the repository root (after `sandy:latest` exists if you use `no_auto_build=True`):
+### Python
 
-```bash
-uvx maturin develop --release
-```
+**Warning:** `global_dependencies` and `bootstrap_python` are trusted caller input. They run in the same sandbox as the user script. Pass only values you control.
 
 ```python
 from sandy import execute_python_docker
@@ -200,33 +250,67 @@ stdout, stderr, exit_code = execute_python_docker(
 )
 ```
 
-### Optional: global dependencies and bootstrap
+`allow_network` defaults to `True` in the Python helpers. The CLI default is no egress. Pass `allow_network=False` when you want the CLI default.
 
-For embedders that want the same [PEP 723](https://docs.astral.sh/uv/guides/scripts/) packages or shared Python on **every** execution:
+`no_auto_build=True` is the Python default. Build `sandy:latest` before that call, or pass `no_auto_build=False`.
 
-- **`global_dependencies`**: list of dependency spec strings. Merged into the script’s `# /// script` block.
-- **`bootstrap_python`**: source inserted right after the closing `# ///` of the PEP 723 block, or at the start of the file if there is no block.
+Package notes: [python/README.md](python/README.md).
 
-```python
-from sandy import execute_python_docker, prepare_script
+### JavaScript
 
-stdout, stderr, code = execute_python_docker(
-    user_script,
-    global_dependencies=["httpx"],
-    bootstrap_python="def shared(): return 1\n",
-)
+`runShell` requires an absolute workspace directory. It uses a clean environment. Network access is off unless `allowNetwork` is true. The default timeout is 120 seconds. The maximum timeout is 600 seconds. Each output stream is bounded. The call rejects the unsandboxed backend. It fails when no selected backend is available.
+
+Android does not load this package.
+
+Package notes: [sandy-js/README.md](sandy-js/README.md).
+
+## Documentation
+
+| Goal | Start here |
+| --- | --- |
+| See the layout and the data flow | [Architecture](docs/architecture.md) |
+| Run a command or read a flag | [CLI reference](docs/cli-reference.md) |
+| Build the image and read the XML | [Docker](docs/docker.md) |
+| Boot a microVM | [Firecracker](docs/firecracker.md) |
+| Call the Rust types | [Library API](docs/api.md) |
+| Build, test, and set logs | [Development](docs/development.md) |
+| Open every guide | [Documentation index](docs/README.md) |
+
+## Troubleshooting
+
+| What you see | What to do |
+| --- | --- |
+| `uv` not found | Install `uv` and put it on `PATH`. |
+| `node` not found | Install Node.js 18 or newer. |
+| `bwrap` reports `setting up uid map: Permission denied` | Install the AppArmor profile in [Requirements](#requirements). |
+| Cannot connect to Docker | Start the daemon. Colima uses its own socket. Sandy checks `DOCKER_HOST`, then the Colima sockets, then the local default. |
+| `docker-exec` cannot find the Dockerfile | Run it from this repository, or pass `--dockerfile .docker/Dockerfile`. |
+| The container cannot install a package | Pass `--allow-network`. The default network mode is `none`. |
+| `fc-exec` cannot open `/dev/kvm` | Use a Linux host with KVM. Build the kernel and the rootfs first. |
+| Python cannot import `sandy` | Run `uvx maturin develop --release` in this repository. |
+| `execute_python_docker` raises a runtime error | Rebuild with `--features python-bindings,docker`. |
+| Node cannot load `sandy-js` | Run `npm run build:native` in `sandy-js/`. |
+
+## Development
+
+```bash
+cargo fmt
+cargo clippy --all-targets --all-features -- -D warnings
+make test
 ```
 
-**Security:** `global_dependencies` and `bootstrap_python` are **trusted caller** input. They execute in the same sandbox as the user script. Pass only values you control, not untrusted user input.
+`make test` runs `cargo test` and `uv run --extra dev pytest`. Use `make test-rust` or `make test-python` for one stack.
 
-**Layout note:** The native symbol lives in `sandy._native`. Import from `sandy` for wrappers that apply `prepare_script` / `prepare_js_script`.
+`RUST_LOG` selects the tracing filter. The default level is `info`.
+
+```bash
+RUST_LOG=debug cargo run -- exec-code --code 'print(1)'
+```
+
+More detail: [Development](docs/development.md).
 
 ## License
 
-This project is licensed under **BSD-4-Clause**.
+The license is [MIT](LICENSE).
 
-Public materials that mention this software must display the acknowledgement in the LICENSE file.
-
-This license is GPL-incompatible.
-
-See [LICENSE](LICENSE) for the full text.
+Keep the copyright notice and the permission notice in every copy.

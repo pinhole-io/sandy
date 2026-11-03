@@ -18,7 +18,7 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
 
-# Build the binary from workspace root with musl target for Alpine compatibility
+# Build the sandy binary with the musl target for the Alpine runtime image.
 # Using BuildKit cache mounts for faster rebuilds
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \

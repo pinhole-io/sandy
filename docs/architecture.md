@@ -1,8 +1,8 @@
 # Architecture
 
-This document describes how **sandy** is structured and how execution flows through the CLI and services.
+This document describes the sandy crate and the path from a caller to a sandbox.
 
-## High-level diagram
+## Data flow
 
 ```mermaid
 flowchart TD
@@ -23,7 +23,7 @@ flowchart TD
     Container --> InnerExec["exec-code / exec-js inside container"]
     InnerExec --> PythonSvc
     InnerExec --> JsSvc
-    Embedder["Embedder e.g. Harn run_command"] --> ExecMod["exec_sandbox"]
+    Embedder["Embedder"] --> ExecMod["exec_sandbox"]
     ExecMod --> NoneSb["NoneSandbox"]
     ExecMod --> Bwrap["BubblewrapSandbox"]
     ExecMod -.-> DockerShell["DockerShellSandbox (feature docker)"]
@@ -37,106 +37,100 @@ flowchart TD
     FirecrackerShell --> FcSvc
 ```
 
-**Note:** In Docker mode, the host process uses `DockerService`, which starts a container whose entrypoint runs the **sandy** binary. Inside the container, `exec-code` uses `PythonExecutionService` (`uv run`) and `exec-js` uses `JsExecutionService` (`node`).
+In Docker mode, the host process uses `DockerService`. The container entrypoint is the `sandy` binary. Inside the container, `exec-code` uses `PythonExecutionService` and `exec-js` uses `JsExecutionService`.
 
 ## Crate layout
 
 | Path | Role |
-|------|------|
-| `src/main.rs` | Binary entry: tracing init, `Cli::parse()`, dispatch to command handlers |
-| `src/lib.rs` | Public API: re-exports CLI types and service types |
-| `src/cli/mod.rs` | `Cli` / `Commands` definitions (Clap) |
-| `src/cli/commands/*.rs` | One module per subcommand (`shell`, `py03`, `exec_code`, `js`, `exec_js`, `docker_exec` / `docker_exec_js` when `docker` enabled) |
-| `src/exec_sandbox/` | Pluggable shell sandbox: `CommandSandbox`, `NoneSandbox`, `BubblewrapSandbox`, optional `DockerShellSandbox` |
-| `src/service/mod.rs` | `PythonExecutionService`, `ExecutionResult`, `PythonExecutionError` |
-| `src/service/js.rs` | `JsExecutionService`, `JsExecutionError` |
-| `src/service/docker/` | `SandboxConfig`, `DockerConfig`, `DockerError`, `DockerService` (Bollard client, `docker` feature) |
-| `src/service/firecracker/` | `FirecrackerConfig`, `FirecrackerService`, vsock protocol, and guest agent (`firecracker` feature) |
+| --- | --- |
+| `src/main.rs` | Binary entry. Starts tracing, parses `Cli`, and dispatches a command. |
+| `src/lib.rs` | Public re-exports |
+| `src/cli/` | Clap types and one module per subcommand |
+| `src/exec_sandbox/` | Shell sandbox: `CommandSandbox`, `NoneSandbox`, `BubblewrapSandbox`, optional Docker and Firecracker shells |
+| `src/service/mod.rs` | `PythonExecutionService` |
+| `src/service/js.rs` | `JsExecutionService` |
+| `src/service/docker/` | `DockerService` and `DockerConfig`. Requires the `docker` feature. |
+| `src/service/firecracker/` | `FirecrackerService`, the vsock protocol, and the guest agent. Requires the `firecracker` feature. |
+| `python/sandy/` | Python package. Wraps `sandy._native`. |
+| `sandy-js/` | napi-rs binding for the shell sandbox |
+| `.docker/` | Image build |
+| `.firecracker/` | Kernel, rootfs, and install helpers |
 
 ## Cargo features
 
 | Feature | Enables |
-|---------|---------|
-| *(none)* | Local Python (`PythonExecutionService`), local JavaScript (`JsExecutionService`), `exec_sandbox` (none + bubblewrap) |
-| `python-bindings` | PyO3 `sandy._native` module |
-| `docker` | bollard, `DockerService`, `docker-exec` / `docker-exec-js` CLI, `DockerShellSandbox`, Python `execute_python_docker` / `execute_javascript_docker` |
-| `firecracker` | `FirecrackerService`, `fc-exec` / `fc-exec-js`, `FirecrackerShellSandbox`, and Firecracker Python bindings |
-| `exec-sandbox` | Empty marker for dependents; library always includes `exec_sandbox` |
+| --- | --- |
+| *(none required)* | Local Python, local JavaScript, and `exec_sandbox` (`NoneSandbox` and `BubblewrapSandbox`) |
+| `python-bindings` | PyO3 module `sandy._native` |
+| `docker` | bollard, `DockerService`, the Docker CLI commands, `DockerShellSandbox`, and the Python Docker helpers |
+| `firecracker` | `FirecrackerService`, the Firecracker CLI commands, `FirecrackerShellSandbox`, and the Python Firecracker helpers |
+| `exec-sandbox` | Empty marker for dependents. The library always includes `exec_sandbox`. |
 
-## Python bindings (PyO3 + maturin)
-
-The published wheel is a **mixed** Rust/Python project:
+## Python package
 
 | Path | Role |
-|------|------|
-| `python/sandy/__init__.py` | Public `import sandy`: wraps native Docker and Firecracker execution and applies optional script preparation. |
-| `python/sandy/script_prep.py` | `prepare_script`, `prepare_js_script`, merge/bootstrap helpers. |
-| `sandy._native` (cdylib) | Low-level Docker and Firecracker execution functions, gated by their Cargo features. |
+| --- | --- |
+| `python/sandy/__init__.py` | Public `import sandy`. Prepares a script, then calls the native helpers. |
+| `python/sandy/script_prep.py` | `prepare_script`, `prepare_js_script`, and the merge helpers |
+| `sandy._native` | Low-level Docker and Firecracker calls. Each call needs its Cargo feature. |
 
-Optional **`global_dependencies`** / **`bootstrap_python`** are documented in the [README](../README.md) (Python section). Embedders that inject their own preamble should call `prepare_script` first, then append env/stdin setup, then execute.
+**Warning:** `global_dependencies` and bootstrap source are trusted caller input. They run in the same sandbox as the user script.
+
+An embedder that injects its own preamble calls `prepare_script` first. It then appends environment setup and runs the script.
 
 ## Execution modes
 
-### Local (`PythonExecutionService`)
+### Local Python
 
-- Invokes `uv run` with a `.py` path (script file or temporary file for inline code).
-- Scripts can use **uv [PEP 723 inline script metadata](https://docs.astral.sh/uv/guides/scripts/#declaring-script-dependencies)** (`# /// script` … `# ///` with `# dependencies = [...]` inside the block), as in [`__scripts__/requests_test.py`](../__scripts__/requests_test.py).
-- **Streaming** APIs print stdout line-by-line; stderr is logged via `tracing::error!` in streaming mode and also aggregated in `ExecutionResult`.
+`PythonExecutionService` runs `uv run` on a `.py` path. Inline code is written to a temporary file. Scripts can use [PEP 723 metadata](https://docs.astral.sh/uv/guides/scripts/#declaring-script-dependencies). Streaming APIs print stdout line by line. Stderr is logged with `tracing` and stored on `ExecutionResult`.
 
-### Local (`JsExecutionService`)
+### Local JavaScript
 
-- Invokes **`node`** on a `.js` / `.mjs` path (script file or temporary `.mjs` for inline code).
-- Scripts can use a **`// /// script`** block (same TOML as PEP 723) listing npm specs. Sandy writes a temp workspace, runs **`npm install --ignore-scripts`**, then `node`.
-- Without a dependency block, the original file is executed in place (cwd is the script’s directory).
+`JsExecutionService` runs `node` on a `.js` or `.mjs` path. A leading `// /// script` block lists npm packages. Sandy writes a temporary workspace, runs `npm install --ignore-scripts`, then runs `node`. A file with no dependency block runs in place. The working directory is the script directory.
 
-### Shell sandbox (`exec_sandbox`)
+### Shell sandbox
 
-For arbitrary shell commands (not Python), embedders use `sandy::exec_sandbox`:
+Embedders use `sandy::exec_sandbox` for a shell command.
 
 | Backend | Requires | Notes |
-|---------|----------|-------|
-| `NoneSandbox` | nothing | Plain `sh -c` in workspace cwd |
-| `BubblewrapSandbox` | `bwrap` on Linux | Read-only root + writable bind mounts, optional `--unshare-net` |
-| `DockerShellSandbox` | `docker` feature + daemon | Alpine shell container with workspace bind-mount |
-| `FirecrackerShellSandbox` | `firecracker` feature + Linux KVM + guest artifacts | MicroVM shell with workspace tar transfer |
+| --- | --- | --- |
+| `NoneSandbox` | nothing | Runs `sh -c` in the workspace |
+| `BubblewrapSandbox` | `bwrap` on Linux | Read-only root, writable bind mounts, optional `--unshare-net` |
+| `DockerShellSandbox` | `docker` feature and a daemon | Alpine shell container. The workspace is a bind mount. |
+| `FirecrackerShellSandbox` | `firecracker` feature, Linux KVM, and guest artifacts | MicroVM shell. The workspace moves as a tar archive. |
 
-`select_backend(SandboxSelection)` picks a backend and returns `Result`. `Auto` prefers bubblewrap → docker (if compiled). When none of those are available it warns, increments `none_sandbox_fallback_count()`, and returns `NoneSandbox` unless `fail_closed` is set (then it returns `SandboxError::Unavailable`). Explicit `ExecBackend::None` still selects none.
-Firecracker is explicit because it needs KVM, a kernel, and a rootfs. Default `fail_closed` is **false** so existing Rust embedders keep the old fallback. Set `fail_closed: true` to match sandy-js.
+`select_backend` returns a `Result`. `Auto` prefers bubblewrap, then Docker when that feature is compiled. When neither backend is available, it warns, increments `none_sandbox_fallback_count()`, and returns `NoneSandbox`. Set `fail_closed` to return `SandboxError::Unavailable` instead. `sandy-js` sets `fail_closed`. Explicit `ExecBackend::None` still selects the unsandboxed backend. Firecracker is explicit because it needs KVM, a kernel, and a rootfs.
 
-### Docker (`DockerService`, feature `docker`)
+### Docker
 
-- Talks to the Docker API via **bollard**.
-- Typical path for `docker-exec`: create a **new** container, run `exec-code --code ...`, collect logs, remove the container (`execute_python_code` → `run_command_with_mounts_and_cleanup`).
-- **Persistent** workflows use `create_persistent_container` (shell + `sleep infinity`), then `execute_python_code_in_container` / `exec_in_container` for reuse.
+`DockerService` talks to the Docker API through bollard. `docker-exec` creates a container, runs `exec-code`, collects logs, and removes the container. A persistent workflow calls `create_persistent_container`, then `execute_python_code_in_container`.
 
-### Firecracker (`FirecrackerService`, feature `firecracker`)
+The connection order is `DOCKER_HOST`, the Colima sockets, then the local Docker default.
 
-- Runs on Linux with `/dev/kvm`, a kernel image, and an ext4 rootfs.
-- Starts one Firecracker process per request and configures it through a Unix API socket.
-- Sends Python, JavaScript, and shell requests to `fc-agent` over a Firecracker vsock.
-- Starts without a network interface. A caller can provide a pre-created TAP device.
-- Transfers shell workspaces as tar archives because Firecracker has no bind mounts.
+### Firecracker
 
-## Output formats
+`FirecrackerService` runs on Linux with `/dev/kvm`, a kernel image, and an ext4 rootfs. It starts one Firecracker process per request and configures it through a Unix socket. Python, JavaScript, and shell requests go to `fc-agent` over vsock. The VM starts with no network interface. A caller can pass a pre-created TAP device. Shell workspaces move as tar archives because Firecracker has no bind mounts.
 
-| Mode | Consumer-facing output |
-|------|-------------------------|
-| `shell` | Interactive prompt; echoes input (extensible) |
-| `py03` / `exec-code` / `js` / `exec-js` | Plain **stdout** (streaming), stderr on failure path, process **exit code** |
-| `docker-exec` / `docker-exec-js` | **XML** document: `<execution>` with `<output>` (`stdout`, `stderr`) and `<metrics>` (timestamps, duration, `exit_code`) |
-| `fc-exec` / `fc-exec-js` | **XML** document with the same output and metrics fields |
+## Output
 
-XML content is escaped (`&`, `<`, `>`, quotes) for safe embedding.
+| Mode | Output |
+| --- | --- |
+| `shell` | Interactive prompt |
+| `py03`, `exec-code`, `js`, `exec-js` | Streaming stdout, stderr on failure, and the process exit code |
+| `docker-exec`, `docker-exec-js`, `fc-exec`, `fc-exec-js` | One XML `<execution>` document with stdout, stderr, and metrics |
 
-## Configuration surfaces
+XML text escapes `&`, `<`, `>`, and quotes.
 
-- **Local**: `SandboxConfig` limits (timeout, output size, `UV_PYTHON`) for `PythonExecutionService`; no Docker daemon.
-- **exec_sandbox**: `ExecPolicy` (cwd, writable roots, network) separate from Docker resource limits in `SandboxConfig`.
-- **Docker**: `DockerConfig` (`image_name`, `image_tag`, `dockerfile_path`, `build_context`) — used when constructing `DockerService` and documented in [Docker guide](docker.md).
+## Configuration
 
-## Related reading
+- Local Python uses `SandboxConfig` for the timeout, the output limit, and `UV_PYTHON`.
+- `exec_sandbox` uses `ExecPolicy` for the working directory, writable roots, and network access.
+- Docker uses `DockerConfig` for the image name, the tag, the Dockerfile path, and the build context. See the [Docker guide](docker.md).
+
+## Related
 
 - [CLI reference](cli-reference.md)
 - [Docker guide](docker.md)
+- [Firecracker guide](firecracker.md)
 - [Library API](api.md)
 - [Development](development.md)

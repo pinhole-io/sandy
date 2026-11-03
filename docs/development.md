@@ -1,29 +1,20 @@
 # Development
 
-## Prerequisites
+## Requirements
 
-- **Rust** with the 2021 edition (toolchain as pinned by your repo or `rustup`)
-- **`uv`** on `PATH` for local `PythonExecutionService` tests and runs
-- **`node`** on `PATH` for local `JsExecutionService` tests and runs (`npm` if you exercise inline JS dependencies)
-- **Docker** (or **Colima**) for Docker-backed tests and manual `docker-exec` checks
-- The **nightly** toolchain may be required if you build using the provided Dockerfile (see [Docker guide](docker.md#building-the-image))
+- Rust with the 2021 edition
+- `uv` on `PATH`, for local Python and for `make test-python`
+- `node` on `PATH`, for local JavaScript. `npm` is required for inline JavaScript dependencies.
+- Docker or Colima, for Docker tests and for `docker-exec`
+- The Docker image build uses the nightly Rust image inside `.docker/Dockerfile`. A local `cargo build` uses your stable toolchain.
 
-## Clone and build
+## Build
 
-From the **`sandy/`** crate directory:
+From this repository:
 
 ```bash
-cd sandy
 cargo build
 cargo build --release
-```
-
-If this crate is a member of a Cargo workspace, run the same targets with `-p sandy` from the **workspace root**.
-
-## Run the binary
-
-```bash
-cd sandy
 cargo run -- --help
 cargo run -- exec-code --code 'print(1)'
 cargo run -- exec-js --code 'console.log(1)'
@@ -31,66 +22,78 @@ cargo run -- exec-js --code 'console.log(1)'
 
 ## Tests
 
-From **`sandy/`**, **`make test`** runs **`cargo test`** and **`uv run --extra dev pytest`**. Use **`make test-rust`** or **`make test-python`** for only one stack; optional **`CARGO_TEST_FLAGS`** / **`PYTEST_ARGS`** are forwarded.
+`make test` runs `cargo test` and `uv run --extra dev pytest`.
 
-### Unit tests
+| Target | Command |
+| --- | --- |
+| Rust and Python | `make test` |
+| Rust only | `make test-rust` |
+| Python only | `make test-python` |
+
+`CARGO_TEST_FLAGS` and `PYTEST_ARGS` are forwarded.
 
 ```bash
-cd sandy
-cargo test
+make test-rust CARGO_TEST_FLAGS="--lib"
+make test-python PYTEST_ARGS="tests/test_script_prep.py"
 ```
 
-Includes tests such as `DockerConfig::validate`, XML escaping in `docker_exec`, etc.
+### Docker integration tests
 
-### Integration tests (Docker)
-
-`tests/docker_integration.rs` contains tests marked **`#[ignore]`** because they need a live Docker daemon (and a suitable image tag).
-
-Run ignored tests explicitly:
+`tests/docker_integration.rs` is marked `#[ignore]`. Those tests need a Docker daemon and a usable image.
 
 ```bash
-cd sandy
-cargo test -- --ignored
+cargo test --features docker --test docker_integration -- --ignored
+```
+
+### Firecracker integration tests
+
+`tests/firecracker_integration.rs` is marked `#[ignore]`. Those tests need Linux KVM and the guest artifacts.
+
+```bash
+cargo test --features firecracker --test firecracker_integration -- --ignored
 ```
 
 ## Logging
 
-The binary initializes `tracing-subscriber` with an **`EnvFilter`**:
+The binary starts `tracing-subscriber` with an `EnvFilter`.
 
-- If **`RUST_LOG`** is set, that filter is used.
-- Otherwise defaults to **`info`**.
-
-Examples:
+- A set `RUST_LOG` value is the filter.
+- An unset `RUST_LOG` uses `info`.
 
 ```bash
-cd sandy
-RUST_LOG=debug cargo run -- docker-exec --code 'print(1)'
+RUST_LOG=debug cargo run -- exec-code --code 'print(1)'
 RUST_LOG=sandy=trace cargo run -- exec-code --code 'print(1)'
 ```
 
-## Rename status (`nexus_sandbox` → `sandy`)
-
-| Area | Status |
-|------|--------|
-| `Cargo.toml` `name = "sandy"` | Crate and default binary name |
-| `src/cli/mod.rs` Clap `name = "sandy"` | Program name in `--help` |
-| `.docker/Dockerfile` | Builds **`sandy`** musl binary; `ENTRYPOINT` is **`sandy`** |
-| `.docker/build.sh` | Defaults **`IMAGE_NAME=sandy`**, `sandy/.docker/Dockerfile` from workspace layout |
-| `tests/docker_integration.rs` | Uses `sandy::...` |
-
-Older docs or comments may still mention **`nexus_sandbox`** / **`nexus-py`**; treat them as legacy names.
-
-## Formatting and lints
-
-Use project-standard `cargo fmt` and `cargo clippy` if your repo enforces them:
+## Format and lint
 
 ```bash
-cd sandy
 cargo fmt
-cargo clippy -- -D warnings
+cargo clippy --all-targets --all-features -- -D warnings
 ```
+
+## Node.js binding
+
+From `sandy-js/`:
+
+```bash
+npm ci
+npm test
+```
+
+## Python package
+
+From this repository:
+
+```bash
+uvx maturin develop --release
+uv run --extra dev pytest
+```
+
+The package source is `python/sandy/`. The extension module is `sandy._native`.
 
 ## Related
 
 - [Docker guide](docker.md)
+- [Firecracker guide](firecracker.md)
 - [CLI reference](cli-reference.md)

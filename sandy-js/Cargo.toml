@@ -1,9 +1,10 @@
 [package]
 name = "sandy_js"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
-license = "BSD-4-Clause"
+license = "MIT"
 description = "Node.js and Bun bindings for Sandy shell sandboxing"
+repository = "https://github.com/pinhole-io/sandy"
 
 [lib]
 crate-type = ["cdylib"]

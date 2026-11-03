@@ -1,8 +1,11 @@
 [package]
 name = "sandy"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2021"
 license = "MIT"
+description = "Sandboxed Python, JavaScript, and shell execution"
+repository = "https://github.com/pinhole-io/sandy"
+readme = "README.md"
 default-run = "sandy"
 
 [lib]
