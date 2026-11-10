@@ -1,5 +1,4 @@
 mod bubblewrap;
-mod warm;
 mod command;
 #[cfg(feature = "docker")]
 mod docker;
@@ -13,6 +12,7 @@ mod policy;
 mod process;
 mod result;
 mod stub;
+mod warm;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

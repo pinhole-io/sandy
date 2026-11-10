@@ -316,6 +316,7 @@ mod tests {
             allow_network: false,
             env: super::super::EnvPolicy::default(),
             max_output_bytes,
+            env_overrides: Vec::new(),
         }
     }
 

@@ -100,12 +100,13 @@ impl BwrapSession {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         apply_env(&mut cmd, &policy.env);
-        let mut child = cmd.spawn().map_err(|error| {
-            SandboxError::SpawnFailed(format!("warm bubblewrap: {error}"))
-        })?;
-        let stdin = child.stdin.take().ok_or_else(|| {
-            SandboxError::SpawnFailed("warm bubblewrap stdin is missing".into())
-        })?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|error| SandboxError::SpawnFailed(format!("warm bubblewrap: {error}")))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| SandboxError::SpawnFailed("warm bubblewrap stdin is missing".into()))?;
         let writable = canonicalize_roots(&policy.writable_roots)?;
         let read_only = canonicalize_roots(read_only_roots)?;
         let mut stderr = child.stderr.take();
@@ -183,9 +184,7 @@ impl BwrapSession {
             if let Ok(Some(status)) = self.child.try_wait() {
                 self.alive = false;
                 let _ = status;
-                return Err(SandboxError::Unavailable(
-                    "warm bubblewrap exited".into(),
-                ));
+                return Err(SandboxError::Unavailable("warm bubblewrap exited".into()));
             }
             if let Some(code) = read_status(&path) {
                 return Ok(code);
@@ -413,7 +412,8 @@ async fn read_stderr(stderr: Option<&mut tokio::process::ChildStderr>) -> String
     };
     use tokio::io::AsyncReadExt;
     let mut buf = vec![0_u8; 1024];
-    let Ok(n) = tokio::time::timeout(Duration::from_millis(200), stderr.read(&mut buf)).await else {
+    let Ok(n) = tokio::time::timeout(Duration::from_millis(200), stderr.read(&mut buf)).await
+    else {
         return "stderr unread".to_string();
     };
     match n {
@@ -451,6 +451,8 @@ mod tests {
             allow_network: false,
             env: EnvPolicy::Clean { allowlist: vec![] },
             max_output_bytes: 64 * 1024,
+
+            env_overrides: Vec::new(),
         };
         let mut session = BubblewrapSandbox
             .open_warm(&policy)

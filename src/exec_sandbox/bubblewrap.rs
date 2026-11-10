@@ -319,6 +319,9 @@ async fn spawn_bwrap(
     cmd.stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     super::env::apply_env(&mut cmd, &policy.env);
+    for (key, value) in &policy.env_overrides {
+        cmd.env(key, value);
+    }
     run_command_with_timeout_and_output(cmd, timeout, policy.max_output_bytes, on_output).await
 }
 
@@ -506,6 +509,8 @@ fn workspace_policy(policy: &ExecPolicy) -> Result<ExecPolicy, SandboxError> {
         allow_network: false,
         env: policy.env.clone(),
         max_output_bytes: policy.max_output_bytes,
+
+        env_overrides: Vec::new(),
     })
 }
 
@@ -595,6 +600,8 @@ mod tests {
             allow_network: false,
             env: EnvPolicy::default(),
             max_output_bytes: 1024 * 1024,
+
+            env_overrides: Vec::new(),
         };
         let argv = build_bwrap_argv(&policy, "echo hi", true, false).expect("argv");
         assert!(argv.contains(&"--unshare-net".to_string()));
@@ -611,6 +618,8 @@ mod tests {
             allow_network: true,
             env: EnvPolicy::default(),
             max_output_bytes: 1024 * 1024,
+
+            env_overrides: Vec::new(),
         };
         let argv = build_bwrap_argv(&policy, "curl example.com", false, true).expect("argv");
         assert!(!argv.contains(&"--unshare-net".to_string()));
@@ -685,6 +694,8 @@ mod tests {
             allow_network: false,
             env: EnvPolicy::default(),
             max_output_bytes: 1024 * 1024,
+
+            env_overrides: Vec::new(),
         };
         let argv = build_bwrap_argv(&policy, "true", false, false).expect("argv");
         let gitdir_path = gitdir
@@ -709,6 +720,8 @@ mod tests {
             allow_network: false,
             env: EnvPolicy::default(),
             max_output_bytes: 1024,
+
+            env_overrides: Vec::new(),
         };
         let argv = build_bwrap_argv_with_read_only_roots(
             &policy,
@@ -737,6 +750,8 @@ mod tests {
             allow_network: false,
             env: EnvPolicy::default(),
             max_output_bytes: 1024,
+
+            env_overrides: Vec::new(),
         };
         let error = build_bwrap_argv_with_read_only_roots(
             &policy,
@@ -759,6 +774,8 @@ mod tests {
             allow_network: false,
             env: EnvPolicy::default(),
             max_output_bytes: 1024,
+
+            env_overrides: Vec::new(),
         };
         let error = WorkspaceBubblewrapSandbox
             .run_shell(&policy, "touch outside", Duration::from_secs(1))
@@ -775,6 +792,8 @@ mod tests {
             allow_network: false,
             env: EnvPolicy::default(),
             max_output_bytes: 1024,
+
+            env_overrides: Vec::new(),
         };
         let argv = build_bwrap_argv(&policy, "true", true, true).expect("argv");
         assert!(!argv

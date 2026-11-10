@@ -62,6 +62,8 @@ pub struct ExecPolicy {
     pub allow_network: bool,
     pub env: EnvPolicy,
     pub max_output_bytes: usize,
+    /// Applied after [`EnvPolicy::resolve`]. A later key replaces an earlier one.
+    pub env_overrides: Vec<(String, String)>,
 }
 
 impl ExecPolicy {
@@ -79,6 +81,7 @@ impl ExecPolicy {
             allow_network: false,
             env: EnvPolicy::default(),
             max_output_bytes: 1024 * 1024,
+            env_overrides: Vec::new(),
         }
     }
 

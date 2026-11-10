@@ -75,10 +75,7 @@ pub trait CommandSandbox: Send + Sync {
     ///
     /// The default fails closed. A backend that implements this reuses the
     /// same mounts for later commands. It must not run the command on the host.
-    async fn open_warm(
-        &self,
-        _policy: &ExecPolicy,
-    ) -> Result<Box<dyn WarmCommand>, SandboxError> {
+    async fn open_warm(&self, _policy: &ExecPolicy) -> Result<Box<dyn WarmCommand>, SandboxError> {
         let _ = _policy;
         Err(SandboxError::Unavailable(
             "warm session is unavailable".into(),
