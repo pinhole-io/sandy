@@ -107,7 +107,7 @@ pub fn firecracker_backend_if_available() -> Option<Arc<dyn CommandSandbox>> {
 
 fn archive_workspace(cwd: &Path) -> Result<String, SandboxError> {
     let output = Command::new("tar")
-        .args(["-cf", "-", "-C"])
+        .args(["-cf", "-", "--exclude=.git", "-C"])
         .arg(cwd)
         .arg(".")
         .output()
@@ -123,7 +123,7 @@ fn archive_workspace(cwd: &Path) -> Result<String, SandboxError> {
 fn restore_workspace(cwd: &Path, archive_hex: &str) -> Result<(), SandboxError> {
     let archive = decode_hex(archive_hex)?;
     let mut child = Command::new("tar")
-        .args(["-xf", "-", "-C"])
+        .args(["-xf", "-", "--exclude=.git", "-C"])
         .arg(cwd)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())

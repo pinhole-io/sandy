@@ -125,6 +125,7 @@ XML text escapes `&`, `<`, `>`, and quotes.
 
 - Local Python uses `SandboxConfig` for the timeout, the output limit, and `UV_PYTHON`.
 - `exec_sandbox` uses `ExecPolicy` for the working directory, writable roots, and network access.
+- Bubblewrap mounts `.git/config`, `.git/config.worktree`, and `.git/hooks` read-only. This covers the workspace repo, a nested repo, and a submodule git dir. Host `git` runs code from these files, so a sandboxed command must not change them. A symlink, or more git dirs than the walk can cover, fails closed. Firecracker does not copy `.git` into the guest or back out.
 - Docker uses `DockerConfig` for the image name, the tag, the Dockerfile path, and the build context. See the [Docker guide](docker.md).
 
 ## Related

@@ -82,6 +82,13 @@ pub(super) fn build_bwrap_argv_with_read_only_roots(
         }
         writable_hosts.push(host);
     }
+    for host in &writable_hosts {
+        if host != &cwd && host.join("HEAD").is_file() {
+            protect_git_dir(&mut args, host, false)?;
+        } else {
+            protect_contained_git(&mut args, host)?;
+        }
+    }
 
     for root in read_only_roots {
         let host = root.canonicalize().map_err(|error| {
@@ -129,6 +136,142 @@ pub(super) fn build_bwrap_argv_with_read_only_roots(
     args.push("-c".into());
     args.push(command.to_string());
     Ok(args)
+}
+
+/// Mount the Git files that host `git` executes from, read-only.
+///
+/// Host `git` runs hooks from `hooks/` and commands named in `config`, such as
+/// `core.fsmonitor`. A sandboxed command that writes either one gets code run
+/// on the host by the next host `git` call. A missing `config` or `hooks/` is
+/// created empty first, as `git init` does, so the command cannot create one.
+/// A symlink cannot be protected by a bind, so it fails closed.
+/// Nested repos and submodule git dirs are covered too. The walk is bounded
+/// and fails closed, so a large tree does not run with a git dir left writable.
+const MAX_GIT_DIRS: usize = 32;
+const MAX_WALK_ENTRIES: usize = 8_192;
+
+fn protect_contained_git(args: &mut Vec<String>, root: &Path) -> Result<(), SandboxError> {
+    let mut count = 0usize;
+    let main = root.join(".git");
+    if std::fs::symlink_metadata(&main).is_ok_and(|meta| meta.is_dir()) {
+        protect_one(args, &main, &mut count)?;
+        protect_modules(args, &main.join("modules"), &mut count)?;
+    }
+    let mut stack = vec![root.to_path_buf()];
+    let mut seen = 0usize;
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries {
+            seen += 1;
+            if seen > MAX_WALK_ENTRIES {
+                return Err(SandboxError::InvalidPolicy(
+                    "too many git directories to protect".into(),
+                ));
+            }
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_symlink() || !kind.is_dir() {
+                continue;
+            }
+            let path = entry.path();
+            if entry.file_name() == ".git" {
+                if path != main {
+                    protect_one(args, &path, &mut count)?;
+                }
+                continue;
+            }
+            stack.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn protect_modules(
+    args: &mut Vec<String>,
+    modules: &Path,
+    count: &mut usize,
+) -> Result<(), SandboxError> {
+    let Ok(entries) = std::fs::read_dir(modules) else {
+        return Ok(());
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let Ok(kind) = entry.file_type() else {
+            continue;
+        };
+        if kind.is_symlink() {
+            return Err(SandboxError::InvalidPolicy(
+                "git module path is a symlink".into(),
+            ));
+        }
+        if kind.is_dir() {
+            protect_one(args, &entry.path(), count)?;
+        }
+    }
+    Ok(())
+}
+
+fn protect_one(args: &mut Vec<String>, git: &Path, count: &mut usize) -> Result<(), SandboxError> {
+    if *count >= MAX_GIT_DIRS {
+        return Err(SandboxError::InvalidPolicy(
+            "too many git directories to protect".into(),
+        ));
+    }
+    protect_git_dir(args, git, true)?;
+    *count += 1;
+    Ok(())
+}
+
+fn protect_git_dir(args: &mut Vec<String>, git: &Path, hooks: bool) -> Result<(), SandboxError> {
+    let config = git.join("config");
+    if std::fs::symlink_metadata(&config).is_err() {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&config)
+            .map_err(|e| SandboxError::InvalidPolicy(format!("git config: {e}")))?;
+    }
+    let worktree_config = git.join("config.worktree");
+    if std::fs::symlink_metadata(&worktree_config).is_err() {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&worktree_config)
+            .map_err(|e| SandboxError::InvalidPolicy(format!("git config.worktree: {e}")))?;
+    }
+    let mut protected = vec![config, worktree_config];
+    if hooks {
+        let dir = git.join("hooks");
+        if std::fs::symlink_metadata(&dir).is_err() {
+            std::fs::create_dir(&dir)
+                .map_err(|e| SandboxError::InvalidPolicy(format!("git hooks: {e}")))?;
+        }
+        protected.push(dir);
+    }
+    for path in protected {
+        match std::fs::symlink_metadata(&path) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(SandboxError::InvalidPolicy(format!(
+                    "git control path is a symlink: {}",
+                    path.display()
+                )));
+            }
+            Ok(_) => {
+                let path = path.display().to_string();
+                args.extend(["--ro-bind".into(), path.clone(), path]);
+            }
+            Err(_) => {}
+        }
+    }
+    Ok(())
 }
 
 fn unshare_net_flag() -> &'static AtomicBool {
@@ -799,5 +942,110 @@ mod tests {
         assert!(!argv
             .windows(3)
             .any(|window| { window[0] == "--ro-bind" && window[1] == "/" && window[2] == "/" }));
+    }
+
+    fn repo_policy(workspace: &Path) -> ExecPolicy {
+        ExecPolicy {
+            cwd: workspace.to_path_buf(),
+            writable_roots: vec![workspace.to_path_buf()],
+            allow_network: false,
+            env: EnvPolicy::default(),
+            max_output_bytes: 1024 * 1024,
+
+            env_overrides: Vec::new(),
+        }
+    }
+
+    fn ro_bind_after(argv: &[String], bind: &str, path: &str) -> bool {
+        let Some(bound) = argv
+            .windows(3)
+            .position(|window| window[0] == "--bind" && window[1] == bind)
+        else {
+            return false;
+        };
+        argv.windows(3).enumerate().any(|(index, window)| {
+            index > bound && window[0] == "--ro-bind" && window[1] == path && window[2] == path
+        })
+    }
+
+    #[test]
+    fn repo_config_and_hooks_are_read_only_after_the_workspace_bind() {
+        let workspace = tempfile::TempDir::new().expect("workspace");
+        let root = workspace.path().canonicalize().expect("canonical");
+        std::fs::create_dir_all(root.join(".git/hooks")).expect("hooks");
+        std::fs::write(root.join(".git/config"), "[core]\n").expect("config");
+        let argv = build_bwrap_argv(&repo_policy(&root), "true", false, false).expect("argv");
+        let bind = root.display().to_string();
+        let git = root.join(".git");
+        assert!(ro_bind_after(
+            &argv,
+            &bind,
+            &git.join("config").display().to_string()
+        ));
+        assert!(ro_bind_after(
+            &argv,
+            &bind,
+            &git.join("hooks").display().to_string()
+        ));
+    }
+
+    #[test]
+    fn missing_repo_hooks_and_config_are_created_then_protected() {
+        let workspace = tempfile::TempDir::new().expect("workspace");
+        let root = workspace.path().canonicalize().expect("canonical");
+        std::fs::create_dir(root.join(".git")).expect("git dir");
+        let argv = build_bwrap_argv(&repo_policy(&root), "true", false, false).expect("argv");
+        assert!(root.join(".git/hooks").is_dir());
+        assert!(root.join(".git/config").is_file());
+        let bind = root.display().to_string();
+        assert!(ro_bind_after(
+            &argv,
+            &bind,
+            &root.join(".git/hooks").display().to_string()
+        ));
+    }
+
+    #[test]
+    fn a_symlinked_repo_hooks_dir_fails_closed() {
+        let workspace = tempfile::TempDir::new().expect("workspace");
+        let root = workspace.path().canonicalize().expect("canonical");
+        std::fs::create_dir_all(root.join("scripts/hooks")).expect("scripts");
+        std::fs::create_dir(root.join(".git")).expect("git dir");
+        std::os::unix::fs::symlink("../scripts/hooks", root.join(".git/hooks")).expect("symlink");
+        let error = build_bwrap_argv(&repo_policy(&root), "true", false, false)
+            .expect_err("symlinked hooks must fail closed");
+        assert!(matches!(error, SandboxError::InvalidPolicy(_)));
+    }
+
+    #[tokio::test]
+    async fn a_sandboxed_command_cannot_write_repo_hooks_or_config() {
+        if !WorkspaceBubblewrapSandbox.is_available() {
+            return;
+        }
+        let workspace = tempfile::TempDir::new().expect("workspace");
+        let root = workspace.path().canonicalize().expect("canonical");
+        std::fs::create_dir_all(root.join(".git/hooks")).expect("hooks");
+        std::fs::write(root.join(".git/config"), "[core]\n").expect("config");
+        let policy = repo_policy(&root);
+        let run = |command: &'static str| {
+            let policy = policy.clone();
+            async move {
+                WorkspaceBubblewrapSandbox
+                    .run_shell(&policy, command, Duration::from_secs(10))
+                    .await
+                    .expect("run")
+                    .exit_code
+            }
+        };
+        assert_ne!(run("printf x > .git/hooks/post-merge").await, Some(0));
+        assert_ne!(run("printf x >> .git/config").await, Some(0));
+        assert_ne!(run("mv .git/hooks .git/hooks.old").await, Some(0));
+        assert_eq!(run("printf ok > note.txt").await, Some(0));
+        assert!(!root.join(".git/hooks/post-merge").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join(".git/config")).expect("config"),
+            "[core]\n"
+        );
+        assert!(root.join("note.txt").is_file());
     }
 }
