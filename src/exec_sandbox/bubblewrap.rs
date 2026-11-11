@@ -153,7 +153,15 @@ const MAX_WALK_ENTRIES: usize = 8_192;
 fn protect_contained_git(args: &mut Vec<String>, root: &Path) -> Result<(), SandboxError> {
     let mut count = 0usize;
     let main = root.join(".git");
-    if std::fs::symlink_metadata(&main).is_ok_and(|meta| meta.is_dir()) {
+    let Ok(main_meta) = std::fs::symlink_metadata(&main) else {
+        return Ok(());
+    };
+    if main_meta.file_type().is_symlink() {
+        return Err(SandboxError::InvalidPolicy(
+            "git control path is a symlink".into(),
+        ));
+    }
+    if main_meta.is_dir() {
         protect_one(args, &main, &mut count)?;
         protect_modules(args, &main.join("modules"), &mut count)?;
     }
@@ -1047,5 +1055,41 @@ mod tests {
             "[core]\n"
         );
         assert!(root.join("note.txt").is_file());
+    }
+
+    #[test]
+    fn a_nested_repo_and_a_submodule_git_dir_are_read_only() {
+        let workspace = tempfile::TempDir::new().expect("workspace");
+        let root = workspace.path().canonicalize().expect("canonical");
+        std::fs::create_dir_all(root.join(".git/modules/lib/hooks")).expect("module");
+        std::fs::write(root.join(".git/config"), "[core]\n").expect("config");
+        std::fs::create_dir_all(root.join("vendor/lib/.git/hooks")).expect("nested");
+        let argv = build_bwrap_argv(&repo_policy(&root), "true", false, false).expect("argv");
+        let bind = root.display().to_string();
+        for path in [
+            root.join(".git/modules/lib/hooks"),
+            root.join(".git/modules/lib/config"),
+            root.join("vendor/lib/.git/hooks"),
+            root.join("vendor/lib/.git/config.worktree"),
+        ] {
+            assert!(
+                ro_bind_after(&argv, &bind, &path.display().to_string()),
+                "{}",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn too_many_git_directories_fail_closed() {
+        let workspace = tempfile::TempDir::new().expect("workspace");
+        let root = workspace.path().canonicalize().expect("canonical");
+        std::fs::create_dir_all(root.join(".git")).expect("git");
+        for index in 0..=32 {
+            std::fs::create_dir_all(root.join(format!("repo-{index}/.git"))).expect("nested");
+        }
+        let error = build_bwrap_argv(&repo_policy(&root), "true", false, false)
+            .expect_err("the walk must fail closed");
+        assert!(matches!(error, SandboxError::InvalidPolicy(_)));
     }
 }

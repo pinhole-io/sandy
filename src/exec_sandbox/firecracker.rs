@@ -162,6 +162,58 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, SandboxError> {
         .collect()
 }
 
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    use super::{archive_workspace, decode_hex, restore_workspace};
+
+    #[test]
+    fn restore_does_not_write_git_metadata() {
+        let planted = tempfile::TempDir::new().expect("planted");
+        let source = planted.path();
+        std::fs::create_dir_all(source.join(".git/hooks")).expect("hooks");
+        std::fs::write(source.join(".git/hooks/post-merge"), "#!/bin/sh\n").expect("hook");
+        std::fs::write(source.join("keep.txt"), "new\n").expect("keep");
+        let tar = Command::new("tar")
+            .args(["-cf", "-", "-C"])
+            .arg(source)
+            .arg(".")
+            .output()
+            .expect("tar");
+        assert!(tar.status.success());
+
+        let dir = tempfile::TempDir::new().expect("dir");
+        let root = dir.path().canonicalize().expect("canonical");
+        std::fs::create_dir_all(root.join(".git/hooks")).expect("hooks");
+        std::fs::write(root.join("keep.txt"), "old\n").expect("keep");
+        restore_workspace(&root, &super::encode_hex(&tar.stdout)).expect("restore");
+        assert!(!root.join(".git/hooks/post-merge").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join("keep.txt")).expect("keep"),
+            "new\n"
+        );
+
+        let archive = archive_workspace(&root).expect("archive");
+        let bytes = decode_hex(&archive).expect("hex");
+        let mut list = Command::new("tar")
+            .args(["-tf", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("list");
+        list.stdin
+            .take()
+            .expect("stdin")
+            .write_all(&bytes)
+            .expect("write");
+        let listed = list.wait_with_output().expect("wait");
+        let names = String::from_utf8(listed.stdout).expect("utf8");
+        assert!(!names.contains(".git"), "{names}");
+    }
+}
+
 fn encode_hex(bytes: &[u8]) -> String {
     let mut result = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
